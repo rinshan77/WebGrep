@@ -9,6 +9,8 @@ import org.apache.tika.Tika;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLConnection;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.*;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,6 +19,7 @@ public class Main {
     private static final Tika TIKA = new Tika();
 
     public static void main(String[] args) {
+        setupSsl();
         if (args.length < 3) {
             System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth>");
             return;
@@ -43,6 +46,24 @@ public class Main {
                     System.out.println(url + " (" + count + ")");
                 }
             });
+        }
+    }
+
+    private static void setupSsl() {
+        try {
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return null; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+        } catch (Exception e) {
+            // Ignore
         }
     }
 
