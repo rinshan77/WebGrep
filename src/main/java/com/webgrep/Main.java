@@ -139,7 +139,9 @@ public class Main {
                 }
 
             } catch (Exception e) {
-                // System.err.println("Error processing " + current.url + ": " + e.getMessage());
+                if (current.depth == 0) {
+                    System.err.println("Error connecting to start URL " + current.url + ": " + e.getMessage());
+                }
             }
         }
 
@@ -149,6 +151,10 @@ public class Main {
     private static String normalizeUrl(String urlString) {
         if (urlString == null || urlString.isEmpty()) {
             return "";
+        }
+        String original = urlString;
+        if (!urlString.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*")) {
+            urlString = "http://" + urlString;
         }
         try {
             URL url = new URL(urlString);
