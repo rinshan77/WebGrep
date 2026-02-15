@@ -21,6 +21,7 @@ public class Main {
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
     public static void main(String[] args) {
+        setupLogging();
         setupSsl();
         if (args.length < 3) {
             System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy]");
@@ -51,6 +52,15 @@ public class Main {
                 }
             });
         }
+    }
+
+    private static void setupLogging() {
+        // Suppress PDFBox and other noisy loggers
+        System.setProperty("org.apache.commons.logging.Log", "org.apache.commons.logging.impl.NoOpLog");
+        // For SLF4J (slf4j-simple)
+        System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "error");
+        // For Log4j2
+        System.setProperty("log4j2.level", "error");
     }
 
     private static void setupSsl() {
@@ -103,8 +113,11 @@ public class Main {
                 String contentType = connection.getContentType();
 
                 if (contentType != null && contentType.contains("text/html")) {
+                    // Jsoup handles the connection and parsing
                     Document doc = Jsoup.connect(current.url)
                             .timeout(5000)
+                            .followRedirects(true)
+                            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
                             .get();
                     content = doc.text();
                     if (current.depth < maxDepth) {
@@ -112,16 +125,33 @@ public class Main {
                         for (Element element : elements) {
                             String link = element.attr("abs:href");
                             String normalizedLink = normalizeUrl(link);
-                            if (!normalizedLink.isEmpty() && !visited.contains(normalizedLink)) {
+                            if (!normalizedLink.isEmpty()) {
                                 links.add(normalizedLink);
                             }
                         }
                     }
                 } else {
-                    // Try to parse as other file types
+                    // Try to parse as other file types using already open connection
                     try (InputStream is = connection.getInputStream()) {
-                        // Tika can handle many formats and tries to detect encoding
-                        content = TIKA.parseToString(is);
+                        // Check size during download if not provided by headers
+                        byte[] buffer = new byte[8192];
+                        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                        int bytesRead;
+                        long totalRead = 0;
+                        while ((bytesRead = is.read(buffer)) != -1) {
+                            totalRead += bytesRead;
+                            if (totalRead > MAX_FILE_SIZE) {
+                                break;
+                            }
+                            baos.write(buffer, 0, bytesRead);
+                        }
+
+                        if (totalRead <= MAX_FILE_SIZE) {
+                            // Tika can handle many formats and tries to detect encoding
+                            try (InputStream bis = new java.io.ByteArrayInputStream(baos.toByteArray())) {
+                                content = TIKA.parseToString(bis);
+                            }
+                        }
                     } catch (Exception e) {
                         // Ignore
                     }
@@ -134,7 +164,8 @@ public class Main {
 
                 if (current.depth < maxDepth) {
                     for (String link : links) {
-                        if (visited.size() < MAX_PAGES && visited.add(link)) {
+                        if (visited.size() < MAX_PAGES && !visited.contains(link)) {
+                            visited.add(link);
                             queue.add(new UrlDepth(link, current.depth + 1));
                         }
                     }
@@ -184,16 +215,6 @@ public class Main {
             return sb.toString();
         } catch (Exception e) {
             return urlString;
-        }
-    }
-
-    private static boolean isHtml(String url) {
-        try {
-            URLConnection connection = new URL(url).openConnection();
-            String contentType = connection.getContentType();
-            return contentType != null && contentType.contains("text/html");
-        } catch (Exception e) {
-            return url.toLowerCase().endsWith(".html") || url.toLowerCase().endsWith(".htm");
         }
     }
 
