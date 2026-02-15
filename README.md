@@ -12,6 +12,7 @@ WebGrep is a CLI tool for searching keywords in web pages and documents up to a 
 - **Multi-Format Support**: Extracts text from HTML, PDF, DOCX, TXT, etc., using Apache Tika.
 - **Robustness**: Normalizes URLs to avoid duplicates and enforces safety limits on page count and file size.
 - **SSL Flexibility**: Automatically trusts all SSL certificates.
+- **Fuzzy Search**: Optional 4th argument `fuzzy` to enable approximate matching (ignores diacritics, symbols, and accepts minor typos).
 
 ### How to Build
 The project uses Maven. You can build the shaded (executable) JAR with:
@@ -21,9 +22,13 @@ mvn package
 
 ### How to Run
 ```bash
-java -jar target/WebGrep-1.0-SNAPSHOT.jar <URL> <keyword> <depth>
+java -jar target/WebGrep-1.0-SNAPSHOT.jar <URL> <keyword> <depth> [fuzzy]
 ```
 Example:
 ```bash
 java -jar target/WebGrep-1.0-SNAPSHOT.jar https://example.com Domain 1
+```
+For fuzzy search:
+```bash
+java -jar target/WebGrep-1.0-SNAPSHOT.jar https://example.com Domain 1 fuzzy
 ```

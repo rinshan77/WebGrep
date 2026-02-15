@@ -23,7 +23,7 @@ public class Main {
     public static void main(String[] args) {
         setupSsl();
         if (args.length < 3) {
-            System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth>");
+            System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy]");
             return;
         }
 
@@ -37,7 +37,9 @@ public class Main {
             return;
         }
 
-        Map<String, Integer> results = crawl(normalizeUrl(startUrl), keyword, maxDepth);
+        boolean fuzzy = args.length >= 4 && args[3].equalsIgnoreCase("fuzzy");
+
+        Map<String, Integer> results = crawl(normalizeUrl(startUrl), keyword, maxDepth, fuzzy);
 
         int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
         System.out.println("Total count: " + totalCount);
@@ -69,7 +71,7 @@ public class Main {
         }
     }
 
-    private static Map<String, Integer> crawl(String startUrl, String keyword, int maxDepth) {
+    private static Map<String, Integer> crawl(String startUrl, String keyword, int maxDepth, boolean fuzzy) {
         Map<String, Integer> results = new LinkedHashMap<>();
         Set<String> visited = new HashSet<>();
         Queue<UrlDepth> queue = new LinkedList<>();
@@ -123,7 +125,7 @@ public class Main {
                     }
                 }
 
-                int count = countMatches(content, keyword);
+                int count = countMatches(content, keyword, fuzzy);
                 if (count > 0) {
                     results.put(current.url, count);
                 }
@@ -187,17 +189,89 @@ public class Main {
         }
     }
 
-    private static int countMatches(String text, String keyword) {
+    private static int countMatches(String text, String keyword, boolean fuzzy) {
         if (text == null || text.isEmpty() || keyword == null || keyword.isEmpty()) {
             return 0;
         }
+        if (!fuzzy) {
+            int count = 0;
+            Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE);
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                count++;
+            }
+            return count;
+        } else {
+            return countFuzzyMatches(text, keyword);
+        }
+    }
+
+    private static int countFuzzyMatches(String text, String keyword) {
+        String superSimpleKeyword = superSimplify(keyword);
+        String superSimpleText = superSimplify(text);
+
+        if (superSimpleKeyword.isEmpty()) return 0;
+
         int count = 0;
-        Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE);
-        Matcher matcher = pattern.matcher(text);
-        while (matcher.find()) {
+        int idx = 0;
+        while ((idx = superSimpleText.indexOf(superSimpleKeyword, idx)) != -1) {
             count++;
+            idx += superSimpleKeyword.length();
+        }
+
+        // If no exact matches (even after super simplification), try typo matching
+        if (count == 0) {
+            String normalizedKeyword = superSimpleKeyword;
+            String normalizedTextWithSpaces = simplifyWithSpaces(text);
+            String[] words = normalizedTextWithSpaces.split("\\s+");
+
+            int threshold = normalizedKeyword.length() <= 4 ? 1 : 2;
+            for (String word : words) {
+                if (word.isEmpty()) continue;
+                if (levenshteinDistance(word, normalizedKeyword) <= threshold) {
+                    count++;
+                }
+            }
         }
         return count;
+    }
+
+    private static String superSimplify(String input) {
+        if (input == null) return "";
+        // 1. Normalize diacritics
+        String normalized = java.text.Normalizer.normalize(input, java.text.Normalizer.Form.NFD);
+        normalized = normalized.replaceAll("\\p{M}", "");
+        // 2. Lowercase and remove all non-alphanumeric
+        return normalized.toLowerCase().replaceAll("[^a-z0-9]", "");
+    }
+
+    private static String simplifyWithSpaces(String input) {
+        if (input == null) return "";
+        // 1. Normalize diacritics
+        String normalized = java.text.Normalizer.normalize(input, java.text.Normalizer.Form.NFD);
+        normalized = normalized.replaceAll("\\p{M}", "");
+        // 2. Lowercase and remove symbols, but keep spaces
+        return normalized.toLowerCase().replaceAll("[^a-z0-9\\s]", " ");
+    }
+
+    private static int levenshteinDistance(String s1, String s2) {
+        int[][] dp = new int[s1.length() + 1][s2.length() + 1];
+
+        for (int i = 0; i <= s1.length(); i++) {
+            for (int j = 0; j <= s2.length(); j++) {
+                if (i == 0) {
+                    dp[i][j] = j;
+                } else if (j == 0) {
+                    dp[i][j] = i;
+                } else {
+                    dp[i][j] = Math.min(Math.min(
+                            dp[i - 1][j] + 1,
+                            dp[i][j - 1] + 1),
+                            dp[i - 1][j - 1] + (s1.charAt(i - 1) == s2.charAt(j - 1) ? 0 : 1));
+                }
+            }
+        }
+        return dp[s1.length()][s2.length()];
     }
 
     private static class UrlDepth {
