@@ -103,7 +103,9 @@ public class Main {
                 String contentType = connection.getContentType();
 
                 if (contentType != null && contentType.contains("text/html")) {
-                    Document doc = Jsoup.connect(current.url).get();
+                    Document doc = Jsoup.connect(current.url)
+                            .timeout(5000)
+                            .get();
                     content = doc.text();
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
@@ -121,7 +123,7 @@ public class Main {
                         // Tika can handle many formats and tries to detect encoding
                         content = TIKA.parseToString(is);
                     } catch (Exception e) {
-                        // Ignore or log
+                        // Ignore
                     }
                 }
 
