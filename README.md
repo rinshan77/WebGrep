@@ -41,6 +41,6 @@ java -jar target/WebGrep-1.0-SNAPSHOT.jar https://example.com Domain 1 exact
 ```
 
 
-Written by and belongs to Simon D.
-Free to use for personal and educational purposes.
-For commercial use please contact me at simon . d . dev symbol proton . me.
+Written by and belongs to Simon D.  
+Free to use for personal and educational purposes.  
+For commercial use please contact me at simon . d . dev symbol proton . me.  

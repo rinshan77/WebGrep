@@ -20,8 +20,8 @@ import java.util.regex.Pattern;
  **/
 public class Main {
     private static Tika TIKA;
-    private static final int MAX_PAGES = 1000; // Reduced to avoid runaway crawls
-    private static final int MAX_LINKS_PER_PAGE = 500; // Limit links per page to avoid getting stuck
+    private static final int MAX_PAGES = 5000;
+    private static final int MAX_LINKS_PER_PAGE = 5000; // Further increased limit
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
     public static void main(String[] args) {
@@ -130,7 +130,6 @@ public class Main {
             pagesCrawled++;
 
             try {
-                System.err.println("Crawling: " + current.url + " (depth: " + current.depth + ")");
                 // Politeness delay
                 Thread.sleep(100);
 
@@ -138,13 +137,22 @@ public class Main {
                 List<String> links = new ArrayList<>();
 
                 org.jsoup.Connection.Response response = Jsoup.connect(current.url)
-                        .timeout(10000)
+                        .timeout(15000)
                         .followRedirects(true)
                         .ignoreContentType(true)
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
                         .header("Accept-Language", "en-US,en;q=0.9,bs;q=0.8,sr;q=0.7,hr;q=0.6")
                         .header("Cache-Control", "no-cache")
+                        .header("Connection", "keep-alive")
                         .header("Pragma", "no-cache")
+                        .header("Sec-Ch-Ua", "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"")
+                        .header("Sec-Ch-Ua-Mobile", "?0")
+                        .header("Sec-Ch-Ua-Platform", "\"Linux\"")
+                        .header("Sec-Fetch-Dest", "document")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Site", "none")
+                        .header("Sec-Fetch-User", "?1")
+                        .header("Upgrade-Insecure-Requests", "1")
                         .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                         .execute();
 
@@ -157,27 +165,64 @@ public class Main {
 
                 if (contentType != null && (contentType.contains("text/html") || contentType.contains("application/xhtml+xml"))) {
                     Document doc = response.parse();
-                    content = doc.text();
+
+                    if (doc.title().contains("Just a moment...") || doc.text().contains("Enable JavaScript and cookies to continue")) {
+                        System.err.println("Warning: Cloudflare challenge detected for " + current.url);
+                    }
+
+                    // Extract text from body, title and meta description for better coverage
+                    StringBuilder sb = new StringBuilder();
+                    sb.append(doc.title()).append(" ");
+                    Element bodyTag = doc.body();
+                    if (bodyTag != null) {
+                        sb.append(bodyTag.text());
+                    } else {
+                        sb.append(doc.text());
+                    }
+                    sb.append(" ").append(doc.select("meta[name=description]").attr("content"));
+                    sb.append(" ").append(doc.select("meta[name=keywords]").attr("content"));
+                    content = sb.toString();
 
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
-                        int linkCount = 0;
                         for (Element element : elements) {
-                            if (linkCount++ >= MAX_LINKS_PER_PAGE) break;
-                            String link = element.attr("abs:href");
+                            if (links.size() >= MAX_LINKS_PER_PAGE) break;
+                            String link = element.absUrl("href");
                             if (link.isEmpty()) {
-                                String href = element.attr("href");
-                                if (!href.isEmpty()) {
+                                link = element.attr("href");
+                                if (!link.isEmpty() && !link.startsWith("http") && !link.startsWith("mailto:") && !link.startsWith("tel:")) {
                                     try {
                                         URL baseUrl = new URL(current.url);
-                                        URL absUrl = new URL(baseUrl, href);
+                                        URL absUrl = new URL(baseUrl, link);
                                         link = absUrl.toString();
-                                    } catch (Exception e) {}
+                                    } catch (Exception e) {
+                                        // Ignore
+                                    }
                                 }
                             }
                             String normalizedLink = normalizeUrl(link);
                             if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
                                 links.add(normalizedLink);
+                            }
+                        }
+
+                        // Fallback Regex link extraction for links Jsoup might miss (e.g. malformed HTML)
+                        if (links.size() < MAX_LINKS_PER_PAGE) {
+                            Pattern linkPattern = Pattern.compile("href\\s*=\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+                            Matcher linkMatcher = linkPattern.matcher(response.body());
+                            while (linkMatcher.find() && links.size() < MAX_LINKS_PER_PAGE) {
+                                String href = linkMatcher.group(1);
+                                if (!href.startsWith("http") && !href.startsWith("mailto:") && !href.startsWith("tel:")) {
+                                    try {
+                                        URL baseUrl = new URL(current.url);
+                                        URL absUrl = new URL(baseUrl, href);
+                                        String link = absUrl.toString();
+                                        String normalizedLink = normalizeUrl(link);
+                                        if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                                            links.add(normalizedLink);
+                                        }
+                                    } catch (Exception e) {}
+                                }
                             }
                         }
                     }
@@ -189,8 +234,19 @@ public class Main {
                         if (contentType != null) {
                             metadata.set(org.apache.tika.metadata.HttpHeaders.CONTENT_TYPE, contentType);
                         }
+
+                        // Use Parser instead of Tika facade for more control if needed,
+                        // but Tika facade should work if configured correctly.
+                        // Ensure we use the shared instance and it's properly initialized.
                         TIKA.setMaxStringLength(-1);
                         content = TIKA.parseToString(bis, metadata);
+
+                        if (content == null || content.trim().isEmpty()) {
+                            // Try again without content type hint if it failed
+                            try (InputStream bis2 = new java.io.ByteArrayInputStream(body)) {
+                                content = TIKA.parseToString(bis2);
+                            }
+                        }
                     } catch (Throwable t) {
                         // Fallback to UTF-8 if Tika fails
                         content = new String(body, java.nio.charset.StandardCharsets.UTF_8);
@@ -212,7 +268,7 @@ public class Main {
                 }
 
             } catch (Exception e) {
-                // Silently skip problematic URLs
+                // System.err.println("Error crawling " + current.url + ": " + e.getMessage());
             }
         }
 
@@ -286,11 +342,18 @@ public class Main {
                 count++;
             }
 
-            // Fallback for PDF-specific issues where words might be merged: "KeywordIsHere" instead of "Keyword Is Here"
-            // If the standard matcher didn't find as many matches as a simple "contains" check would,
-            // or if we want to be even more aggressive.
-            // Actually Pattern.quote(keyword) already handles it.
-
+            // Fallback for cases where standard matching might fail due to invisible characters or formatting
+            if (count == 0) {
+                String simpleKeyword = superSimplify(keyword);
+                String simpleText = superSimplify(text);
+                if (!simpleKeyword.isEmpty()) {
+                    int idx = 0;
+                    while ((idx = simpleText.indexOf(simpleKeyword, idx)) != -1) {
+                        count++;
+                        idx += simpleKeyword.length();
+                    }
+                }
+            }
             return count;
         }
     }
@@ -365,7 +428,7 @@ public class Main {
 
     private static boolean isIgnoredLink(String url) {
         String lower = url.toLowerCase();
-        // Remove fragment for comparison if not already removed by normalizeUrl
+        // Remove fragment for comparison
         int hashIdx = lower.indexOf('#');
         if (hashIdx != -1) {
             lower = lower.substring(0, hashIdx);
@@ -373,6 +436,11 @@ public class Main {
 
         // Only ignore clearly non-content static assets.
         // Be careful not to ignore .php, .aspx, .jsp etc.
+        // Also ensure we don't ignore files that might contain text like .pdf, .doc, etc.
+        if (lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".txt")) {
+            return false;
+        }
+
         return lower.endsWith(".css") || lower.endsWith(".js") || lower.endsWith(".png")
                 || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".gif")
                 || lower.endsWith(".svg") || lower.endsWith(".ico") || lower.endsWith(".woff")
