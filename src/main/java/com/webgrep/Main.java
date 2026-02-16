@@ -45,7 +45,8 @@ public class Main {
 
         String mode = args.length >= 4 ? args[3].toLowerCase() : "default";
 
-        Map<String, Integer> results = crawl(normalizeUrl(startUrl, null), keyword, maxDepth, mode);
+        CrawlResult crawlResult = crawl(normalizeUrl(startUrl, null), keyword, maxDepth, mode);
+        Map<String, Integer> results = crawlResult.results;
 
         int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
         System.out.println("Total count: " + totalCount);
@@ -61,6 +62,13 @@ public class Main {
                     System.out.println(url + " (" + count + ")");
                 }
             }
+        }
+
+        if (!crawlResult.blockedUrls.isEmpty()) {
+            System.out.println("\nNotice: Some URLs were blocked or could not be fully processed:");
+            crawlResult.blockedUrls.forEach((url, reason) -> {
+                System.out.println("Couldn't retrieve all links from the URL, blocked because of " + reason + ": " + url);
+            });
         }
     }
 
@@ -114,8 +122,9 @@ public class Main {
         }
     }
 
-    private static Map<String, Integer> crawl(String startUrl, String keyword, int maxDepth, String mode) {
+    private static CrawlResult crawl(String startUrl, String keyword, int maxDepth, String mode) {
         Map<String, Integer> results = new LinkedHashMap<>();
+        Map<String, String> blockedUrls = new LinkedHashMap<>();
         Set<String> visited = new HashSet<>();
         Queue<UrlDepth> queue = new LinkedList<>();
 
@@ -179,7 +188,7 @@ public class Main {
                     Document doc = response.parse();
 
                     if (doc.title().contains("Just a moment...") || doc.text().contains("Enable JavaScript and cookies to continue")) {
-                        System.err.println("Warning: Cloudflare challenge detected for " + current.url);
+                        blockedUrls.put(current.url, "Cloudflare/Bot protection challenge");
                     }
 
                     // Extract text from body, title and meta description for better coverage
@@ -229,12 +238,16 @@ public class Main {
                     }
                 }
 
+            } catch (org.jsoup.HttpStatusException e) {
+                if (e.getStatusCode() == 403 || e.getStatusCode() == 429) {
+                    blockedUrls.put(current.url, "HTTP " + e.getStatusCode() + " (Access Denied/Rate Limited)");
+                }
             } catch (Exception e) {
                 // System.err.println("Error crawling " + current.url + ": " + e.getMessage());
             }
         }
 
-        return results;
+        return new CrawlResult(results, blockedUrls);
     }
 
     private static String extractTextFromHtml(Document doc) {
@@ -483,6 +496,16 @@ public class Main {
                 || lower.contains("/tag/") || lower.contains("/tags/") || lower.contains("/author/")
                 || lower.contains("video.klix.ba") || lower.contains("static.klix.ba")
                 || lower.contains("sdk.privacy-center.org");
+    }
+
+    private static class CrawlResult {
+        Map<String, Integer> results;
+        Map<String, String> blockedUrls;
+
+        CrawlResult(Map<String, Integer> results, Map<String, String> blockedUrls) {
+            this.results = results;
+            this.blockedUrls = blockedUrls;
+        }
     }
 
     private static class UrlDepth {
