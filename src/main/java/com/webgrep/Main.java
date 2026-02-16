@@ -20,9 +20,9 @@ import java.util.regex.Pattern;
  **/
 public class Main {
     private static Tika TIKA;
-    private static final int MAX_PAGES = 20000; // Large limit for pages with massive link counts
+    private static final int MAX_PAGES = 1000; // Reduced to avoid runaway crawls
+    private static final int MAX_LINKS_PER_PAGE = 500; // Limit links per page to avoid getting stuck
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
-    private static final org.jsoup.Connection SESSION = Jsoup.newSession();
 
     public static void main(String[] args) {
         setupLogging();
@@ -137,23 +137,14 @@ public class Main {
                 String content = "";
                 List<String> links = new ArrayList<>();
 
-                org.jsoup.Connection.Response response = SESSION.newRequest()
-                        .url(current.url)
-                        .timeout(20000)
+                org.jsoup.Connection.Response response = Jsoup.connect(current.url)
+                        .timeout(10000)
                         .followRedirects(true)
                         .ignoreContentType(true)
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
                         .header("Accept-Language", "en-US,en;q=0.9,bs;q=0.8,sr;q=0.7,hr;q=0.6")
                         .header("Cache-Control", "no-cache")
                         .header("Pragma", "no-cache")
-                        .header("Sec-Ch-Ua", "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"")
-                        .header("Sec-Ch-Ua-Mobile", "?0")
-                        .header("Sec-Ch-Ua-Platform", "\"Linux\"")
-                        .header("Sec-Fetch-Dest", "document")
-                        .header("Sec-Fetch-Mode", "navigate")
-                        .header("Sec-Fetch-Site", "none")
-                        .header("Sec-Fetch-User", "?1")
-                        .header("Upgrade-Insecure-Requests", "1")
                         .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                         .execute();
 
@@ -170,7 +161,9 @@ public class Main {
 
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
+                        int linkCount = 0;
                         for (Element element : elements) {
+                            if (linkCount++ >= MAX_LINKS_PER_PAGE) break;
                             String link = element.attr("abs:href");
                             if (link.isEmpty()) {
                                 String href = element.attr("href");
