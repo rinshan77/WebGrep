@@ -156,6 +156,18 @@ public class Main {
                         .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                         .execute();
 
+                String contentLengthHeader = response.header("Content-Length");
+                if (contentLengthHeader != null) {
+                    try {
+                        long length = Long.parseLong(contentLengthHeader);
+                        if (length > MAX_FILE_SIZE) {
+                            continue;
+                        }
+                    } catch (NumberFormatException e) {
+                        // Ignore invalid content-length
+                    }
+                }
+
                 String contentType = response.contentType();
                 byte[] body = response.bodyAsBytes();
 
@@ -171,44 +183,10 @@ public class Main {
                     }
 
                     // Extract text from body, title and meta description for better coverage
-                    StringBuilder sb = new StringBuilder();
-                    sb.append(doc.title()).append(" ");
-                    Element bodyTag = doc.body();
-                    if (bodyTag != null) {
-                        sb.append(bodyTag.text());
-                    } else {
-                        sb.append(doc.text());
-                    }
-                    sb.append(" ").append(doc.select("meta[name=description]").attr("content"));
-                    sb.append(" ").append(doc.select("meta[name=keywords]").attr("content"));
-                    content = sb.toString();
+                    content = extractTextFromHtml(doc);
 
                     if (current.depth < maxDepth) {
-                        Elements elements = doc.select("a[href]");
-                        for (Element element : elements) {
-                            if (links.size() >= MAX_LINKS_PER_PAGE) break;
-                            String link = element.absUrl("href");
-                            if (link.isEmpty()) {
-                                link = element.attr("href");
-                            }
-                            String normalizedLink = normalizeUrl(link, current.url);
-                            if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
-                                links.add(normalizedLink);
-                            }
-                        }
-
-                        // Fallback Regex link extraction for links Jsoup might miss (e.g. malformed HTML)
-                        if (links.size() < MAX_LINKS_PER_PAGE) {
-                            Pattern linkPattern = Pattern.compile("href\\s*=\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
-                            Matcher linkMatcher = linkPattern.matcher(response.body());
-                            while (linkMatcher.find() && links.size() < MAX_LINKS_PER_PAGE) {
-                                String href = linkMatcher.group(1);
-                                String normalizedLink = normalizeUrl(href, current.url);
-                                if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
-                                    links.add(normalizedLink);
-                                }
-                            }
-                        }
+                        links = extractLinks(doc, response.body(), current.url);
                     }
                 } else {
                     // Use Tika for non-HTML content (PDF, etc)
@@ -257,6 +235,50 @@ public class Main {
         }
 
         return results;
+    }
+
+    private static String extractTextFromHtml(Document doc) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(doc.title()).append(" ");
+        Element bodyTag = doc.body();
+        if (bodyTag != null) {
+            sb.append(bodyTag.text());
+        } else {
+            sb.append(doc.text());
+        }
+        sb.append(" ").append(doc.select("meta[name=description]").attr("content"));
+        sb.append(" ").append(doc.select("meta[name=keywords]").attr("content"));
+        return sb.toString();
+    }
+
+    private static List<String> extractLinks(Document doc, String rawBody, String baseUrl) {
+        List<String> links = new ArrayList<>();
+        Elements elements = doc.select("a[href]");
+        for (Element element : elements) {
+            if (links.size() >= MAX_LINKS_PER_PAGE) break;
+            String link = element.absUrl("href");
+            if (link.isEmpty()) {
+                link = element.attr("href");
+            }
+            String normalizedLink = normalizeUrl(link, baseUrl);
+            if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                links.add(normalizedLink);
+            }
+        }
+
+        // Fallback Regex link extraction for links Jsoup might miss (e.g. malformed HTML)
+        if (links.size() < MAX_LINKS_PER_PAGE) {
+            Pattern linkPattern = Pattern.compile("href\\s*=\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+            Matcher linkMatcher = linkPattern.matcher(rawBody);
+            while (linkMatcher.find() && links.size() < MAX_LINKS_PER_PAGE) {
+                String href = linkMatcher.group(1);
+                String normalizedLink = normalizeUrl(href, baseUrl);
+                if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                    links.add(normalizedLink);
+                }
+            }
+        }
+        return links;
     }
 
     private static String normalizeUrl(String urlString, String baseUrlString) {
@@ -454,9 +476,11 @@ public class Main {
                 || lower.endsWith(".woff2") || lower.endsWith(".ttf") || lower.endsWith(".otf")
                 || lower.endsWith(".mp3") || lower.endsWith(".mp4") || lower.endsWith(".wav")
                 || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".wmv")
+                || lower.endsWith(".zip") || lower.endsWith(".rar") || lower.endsWith(".7z") || lower.endsWith(".tar.gz")
                 || lower.contains("googleads") || lower.contains("doubleclick")
                 || lower.contains("facebook.com/sharer") || lower.contains("twitter.com/intent/tweet")
                 || lower.contains("linkedin.com/share") || lower.contains("pinterest.com/pin")
+                || lower.contains("/tag/") || lower.contains("/tags/") || lower.contains("/author/")
                 || lower.contains("video.klix.ba") || lower.contains("static.klix.ba")
                 || lower.contains("sdk.privacy-center.org");
     }
