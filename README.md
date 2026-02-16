@@ -3,11 +3,12 @@
 WebGrep is a high-performance CLI crawler and search tool designed to find keywords across websites and binary documents (PDF, DOCX, etc.) with professional-grade features and reporting.
 
 ### Architecture
-- **Crawler**: Manages the crawl queue, depth logic, and domain constraints.
-- **Fetcher**: Robust HTTP client based on Jsoup with browser mimicry and Cloudflare detection.
-- **Extractor**: Uses Apache Tika for multi-format content extraction (PDF, DOCX, TXT) and Jsoup for intelligent HTML text extraction (including metadata).
-- **Matcher**: Pluggable matching engine supporting case-insensitive, exact, and fuzzy (Levenshtein) strategies.
-- **Reporter**: Flexible output engine supporting both human-readable text and machine-ready JSON.
+WebGrep is designed with a modular architecture for high performance and maintainability:
+- **CliOptions**: Handles advanced argument parsing and strict input validation.
+- **Crawler**: Manages the multi-level crawl queue, domain constraints, and politeness delays.
+- **ContentExtractor**: Orchestrates intelligent text extraction from HTML (via Jsoup) and binary formats like PDF/DOCX (via Apache Tika).
+- **MatchEngine**: Executes pluggable matching strategies including case-insensitive, exact, and fuzzy (Levenshtein) searches with Unicode support.
+- **ReportWriter**: Generates human-readable text summaries or structured JSON for automation.
 
 ### Depth Definition
 - **Depth 0**: Scans only the provided seed URL.
@@ -43,9 +44,38 @@ java -jar target/WebGrep-1.0-SNAPSHOT.jar --url <URL> --keyword <keyword> [optio
 java -jar target/WebGrep-1.0-SNAPSHOT.jar --url https://example.com --keyword Domain
 ```
 
-**JSON output for automation:**
+**JSON output with detailed metrics:**
 ```bash
 java -jar target/WebGrep-1.0-SNAPSHOT.jar --url https://example.com --keyword Domain --output json
+```
+
+### Sample Output (JSON)
+```json
+{
+  "query": {
+    "url": "http://example.com",
+    "keyword": "domain",
+    "depth": 0,
+    "mode": "default"
+  },
+  "stats": {
+    "total_matches": 3,
+    "pages_visited": 1,
+    "pages_parsed": 1,
+    "pages_blocked": 0,
+    "errors": {
+      "network_error": 0,
+      "blocked": 0,
+      "parse_error": 0,
+      "skipped_size": 0,
+      "skipped_type": 0
+    }
+  },
+  "results": [
+    { "url": "http://example.com/", "count": 3 }
+  ],
+  "blocked": []
+}
 ```
 
 ### Limitations
