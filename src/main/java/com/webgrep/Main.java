@@ -19,6 +19,7 @@ public class Main {
     private static Tika TIKA;
     private static final int MAX_PAGES = 1000; // Limit total pages to prevent runaway crawl
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    private static final org.jsoup.Connection SESSION = Jsoup.newSession();
 
     public static void main(String[] args) {
         setupLogging();
@@ -126,107 +127,73 @@ public class Main {
             pagesCrawled++;
 
             try {
+                // Politeness delay
+                Thread.sleep(100);
+
                 String content = "";
                 List<String> links = new ArrayList<>();
 
-                URLConnection connection = new URL(current.url).openConnection();
-                // Add User-Agent to the manual connection to avoid 403s from some sites (like Cloudflare)
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-                connection.setConnectTimeout(5000);
-                connection.setReadTimeout(5000);
+                org.jsoup.Connection.Response response = SESSION.newRequest()
+                        .url(current.url)
+                        .timeout(10000)
+                        .followRedirects(true)
+                        .ignoreContentType(true)
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+                        .header("Accept-Language", "en-US,en;q=0.9,bs;q=0.8,sr;q=0.7,hr;q=0.6")
+                        .header("Cache-Control", "no-cache")
+                        .header("Pragma", "no-cache")
+                        .header("Sec-Ch-Ua", "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"")
+                        .header("Sec-Ch-Ua-Mobile", "?0")
+                        .header("Sec-Ch-Ua-Platform", "\"Linux\"")
+                        .header("Sec-Fetch-Dest", "document")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Site", "none")
+                        .header("Sec-Fetch-User", "?1")
+                        .header("Upgrade-Insecure-Requests", "1")
+                        .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                        .execute();
 
-                // Check size if possible
-                long contentLength = connection.getContentLengthLong();
-                if (contentLength > MAX_FILE_SIZE) {
+                String contentType = response.contentType();
+                byte[] body = response.bodyAsBytes();
+
+                if (body.length > MAX_FILE_SIZE) {
                     continue;
                 }
 
-                String contentType = connection.getContentType();
-                // If contentType is null, Tika will try to detect it from the stream
-
                 if (contentType != null && (contentType.contains("text/html") || contentType.contains("application/xhtml+xml"))) {
-                    // Jsoup handles the connection and parsing
-                    Document doc = Jsoup.connect(current.url)
-                            .timeout(5000)
-                            .followRedirects(true)
-                            .ignoreContentType(true)
-                            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-                            .header("Accept-Language", "en-US,en;q=0.9")
-                            .header("Cache-Control", "no-cache")
-                            .header("Pragma", "no-cache")
-                            .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-                            .get();
+                    Document doc = response.parse();
                     content = doc.text();
-                    // System.out.println("[DEBUG] Processing URL: " + current.url + " Content length: " + content.length());
 
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
                         for (Element element : elements) {
                             String link = element.attr("abs:href");
                             if (link.isEmpty()) {
-                                // Try to construct abs href manually if Jsoup failed due to base URI issues
                                 String href = element.attr("href");
                                 if (!href.isEmpty()) {
                                     try {
                                         URL baseUrl = new URL(current.url);
                                         URL absUrl = new URL(baseUrl, href);
                                         link = absUrl.toString();
-                                    } catch (Exception e) {
-                                        // Ignore
-                                    }
+                                    } catch (Exception e) {}
                                 }
                             }
                             String normalizedLink = normalizeUrl(link);
-                            if (!normalizedLink.isEmpty()) {
-                                // Filter out common non-article/non-content links to focus on actual pages
-                                if (!isIgnoredLink(normalizedLink)) {
-                                    // System.out.println("[DEBUG] Adding link from " + current.url + " -> " + normalizedLink);
-                                    links.add(normalizedLink);
-                                }
+                            if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                                links.add(normalizedLink);
                             }
                         }
                     }
-                }
-
-                // If content is empty (not HTML or Jsoup failed to get text), use Tika
-                // ALSO force Tika for PDF to ensure deep extraction
-                if (content.isEmpty() || (contentType != null && contentType.contains("application/pdf"))) {
-                    try (InputStream is = connection.getInputStream()) {
-                        // Check size during download if not provided by headers
-                        byte[] buffer = new byte[8192];
-                        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                        int bytesRead;
-                        long totalRead = 0;
-                        while ((bytesRead = is.read(buffer)) != -1) {
-                            totalRead += bytesRead;
-                            if (totalRead > MAX_FILE_SIZE) {
-                                break;
-                            }
-                            baos.write(buffer, 0, bytesRead);
+                } else {
+                    // Use Tika for non-HTML content (PDF, etc)
+                    try (InputStream bis = new java.io.ByteArrayInputStream(body)) {
+                        org.apache.tika.metadata.Metadata metadata = new org.apache.tika.metadata.Metadata();
+                        metadata.set(org.apache.tika.metadata.TikaCoreProperties.RESOURCE_NAME_KEY, current.url);
+                        if (contentType != null) {
+                            metadata.set(org.apache.tika.metadata.HttpHeaders.CONTENT_TYPE, contentType);
                         }
-
-                        if (totalRead <= MAX_FILE_SIZE) {
-                            try (InputStream bis = new java.io.ByteArrayInputStream(baos.toByteArray())) {
-                                org.apache.tika.metadata.Metadata metadata = new org.apache.tika.metadata.Metadata();
-                                metadata.set(org.apache.tika.metadata.TikaCoreProperties.RESOURCE_NAME_KEY, current.url);
-                                if (contentType != null) {
-                                    metadata.set(org.apache.tika.metadata.HttpHeaders.CONTENT_TYPE, contentType);
-                                }
-
-                                // Configure Tika for exhaustive extraction
-                                TIKA.setMaxStringLength(-1);
-
-                                // For PDF documents, we might want to try to extract even more details if Tika core allows.
-                                // The standard parseToString uses the AutoDetectParser.
-                                String tikaContent = TIKA.parseToString(bis, metadata);
-
-                                if (content.isEmpty() || (contentType != null && contentType.contains("application/pdf"))) {
-                                    content = tikaContent;
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        // Ignore
+                        TIKA.setMaxStringLength(-1);
+                        content = TIKA.parseToString(bis, metadata);
                     }
                 }
 
@@ -245,9 +212,7 @@ public class Main {
                 }
 
             } catch (Exception e) {
-                if (current.depth == 0) {
-                    System.err.println("Error connecting to start URL " + current.url + ": " + e.getMessage());
-                }
+                // Silently skip problematic URLs to avoid log noise
             }
         }
 
