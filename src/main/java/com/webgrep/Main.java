@@ -15,9 +15,12 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * @author Simon D.
+ **/
 public class Main {
     private static Tika TIKA;
-    private static final int MAX_PAGES = 1000; // Limit total pages to prevent runaway crawl
+    private static final int MAX_PAGES = 20000; // Large limit for pages with massive link counts
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
     private static final org.jsoup.Connection SESSION = Jsoup.newSession();
 
@@ -127,6 +130,7 @@ public class Main {
             pagesCrawled++;
 
             try {
+                System.err.println("Crawling: " + current.url + " (depth: " + current.depth + ")");
                 // Politeness delay
                 Thread.sleep(100);
 
@@ -135,7 +139,7 @@ public class Main {
 
                 org.jsoup.Connection.Response response = SESSION.newRequest()
                         .url(current.url)
-                        .timeout(10000)
+                        .timeout(20000)
                         .followRedirects(true)
                         .ignoreContentType(true)
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
@@ -194,6 +198,9 @@ public class Main {
                         }
                         TIKA.setMaxStringLength(-1);
                         content = TIKA.parseToString(bis, metadata);
+                    } catch (Throwable t) {
+                        // Fallback to UTF-8 if Tika fails
+                        content = new String(body, java.nio.charset.StandardCharsets.UTF_8);
                     }
                 }
 
@@ -212,7 +219,7 @@ public class Main {
                 }
 
             } catch (Exception e) {
-                // Silently skip problematic URLs to avoid log noise
+                // Silently skip problematic URLs
             }
         }
 
@@ -393,4 +400,4 @@ public class Main {
             this.depth = depth;
         }
     }
-}
+} // Code belongs to Simon D.
