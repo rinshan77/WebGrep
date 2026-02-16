@@ -16,12 +16,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class Main {
-    private static final Tika TIKA = new Tika();
+    private static Tika TIKA;
     private static final int MAX_PAGES = 1000; // Limit total pages to prevent runaway crawl
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
     public static void main(String[] args) {
         setupLogging();
+        TIKA = new Tika();
         setupSsl();
         if (args.length < 3) {
             System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy]");
@@ -61,6 +62,29 @@ public class Main {
         System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "error");
         // For Log4j2
         System.setProperty("log4j2.level", "error");
+
+        // Use reflection to set PDFBox logging if available, to avoid direct dependency if not needed
+        // But we have tika-parsers-standard-package which includes PDFBox
+        try {
+            java.util.logging.Logger pdfboxLogger = java.util.logging.Logger.getLogger("org.apache.pdfbox");
+            pdfboxLogger.setLevel(java.util.logging.Level.OFF);
+            java.util.logging.Logger fontboxLogger = java.util.logging.Logger.getLogger("org.apache.fontbox");
+            fontboxLogger.setLevel(java.util.logging.Level.OFF);
+        } catch (Exception e) {
+            // Ignore
+        }
+
+        // Suppress java.util.logging (JUL) globally as well
+        try {
+            java.util.logging.LogManager.getLogManager().reset();
+            java.util.logging.Logger rootLogger = java.util.logging.Logger.getLogger("");
+            rootLogger.setLevel(java.util.logging.Level.OFF);
+            for (java.util.logging.Handler handler : rootLogger.getHandlers()) {
+                rootLogger.removeHandler(handler);
+            }
+        } catch (Exception e) {
+            // Ignore
+        }
     }
 
     private static void setupSsl() {
@@ -111,15 +135,18 @@ public class Main {
                 }
 
                 String contentType = connection.getContentType();
+                // If contentType is null, Tika will try to detect it from the stream
 
-                if (contentType != null && contentType.contains("text/html")) {
+                if (contentType != null && (contentType.contains("text/html") || contentType.contains("application/xhtml+xml"))) {
                     // Jsoup handles the connection and parsing
                     Document doc = Jsoup.connect(current.url)
                             .timeout(5000)
                             .followRedirects(true)
+                            .ignoreContentType(true)
                             .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
                             .get();
                     content = doc.text();
+                    
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
                         for (Element element : elements) {
@@ -130,7 +157,14 @@ public class Main {
                             }
                         }
                     }
-                } else {
+                }
+
+                // Even if it was HTML, we still allow Tika to process it if content is empty 
+                // or just always process non-HTML via Tika. 
+                // Actually, the current logic skips Tika if it's HTML.
+                // Let's ensure we ALWAYS try Tika if content is empty and it's not HTML.
+
+                if (content.isEmpty()) {
                     // Try to parse as other file types using already open connection
                     try (InputStream is = connection.getInputStream()) {
                         // Check size during download if not provided by headers
@@ -149,7 +183,10 @@ public class Main {
                         if (totalRead <= MAX_FILE_SIZE) {
                             // Tika can handle many formats and tries to detect encoding
                             try (InputStream bis = new java.io.ByteArrayInputStream(baos.toByteArray())) {
-                                content = TIKA.parseToString(bis);
+                                // Explicitly hint to Tika about the URL to help with detection
+                                org.apache.tika.metadata.Metadata metadata = new org.apache.tika.metadata.Metadata();
+                                metadata.set(org.apache.tika.metadata.TikaCoreProperties.RESOURCE_NAME_KEY, current.url);
+                                content = TIKA.parseToString(bis, metadata);
                             }
                         }
                     } catch (Exception e) {
@@ -222,9 +259,10 @@ public class Main {
         if (text == null || text.isEmpty() || keyword == null || keyword.isEmpty()) {
             return 0;
         }
+        // Always case-insensitive as per user request
         if (!fuzzy) {
             int count = 0;
-            Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE);
+            Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
             Matcher matcher = pattern.matcher(text);
             while (matcher.find()) {
                 count++;
