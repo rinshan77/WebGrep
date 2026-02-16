@@ -25,7 +25,7 @@ public class Main {
         TIKA = new Tika();
         setupSsl();
         if (args.length < 3) {
-            System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy]");
+            System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy|exact]");
             return;
         }
 
@@ -39,9 +39,9 @@ public class Main {
             return;
         }
 
-        boolean fuzzy = args.length >= 4 && args[3].equalsIgnoreCase("fuzzy");
+        String mode = args.length >= 4 ? args[3].toLowerCase() : "default";
 
-        Map<String, Integer> results = crawl(normalizeUrl(startUrl), keyword, maxDepth, fuzzy);
+        Map<String, Integer> results = crawl(normalizeUrl(startUrl), keyword, maxDepth, mode);
 
         int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
         System.out.println("Total count: " + totalCount);
@@ -105,7 +105,7 @@ public class Main {
         }
     }
 
-    private static Map<String, Integer> crawl(String startUrl, String keyword, int maxDepth, boolean fuzzy) {
+    private static Map<String, Integer> crawl(String startUrl, String keyword, int maxDepth, String mode) {
         Map<String, Integer> results = new LinkedHashMap<>();
         Set<String> visited = new HashSet<>();
         Queue<UrlDepth> queue = new LinkedList<>();
@@ -146,7 +146,7 @@ public class Main {
                             .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
                             .get();
                     content = doc.text();
-                    
+
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
                         for (Element element : elements) {
@@ -159,13 +159,8 @@ public class Main {
                     }
                 }
 
-                // Even if it was HTML, we still allow Tika to process it if content is empty 
-                // or just always process non-HTML via Tika. 
-                // Actually, the current logic skips Tika if it's HTML.
-                // Let's ensure we ALWAYS try Tika if content is empty and it's not HTML.
-
+                // If content is empty (not HTML or Jsoup failed to get text), use Tika
                 if (content.isEmpty()) {
-                    // Try to parse as other file types using already open connection
                     try (InputStream is = connection.getInputStream()) {
                         // Check size during download if not provided by headers
                         byte[] buffer = new byte[8192];
@@ -181,11 +176,13 @@ public class Main {
                         }
 
                         if (totalRead <= MAX_FILE_SIZE) {
-                            // Tika can handle many formats and tries to detect encoding
                             try (InputStream bis = new java.io.ByteArrayInputStream(baos.toByteArray())) {
-                                // Explicitly hint to Tika about the URL to help with detection
                                 org.apache.tika.metadata.Metadata metadata = new org.apache.tika.metadata.Metadata();
                                 metadata.set(org.apache.tika.metadata.TikaCoreProperties.RESOURCE_NAME_KEY, current.url);
+
+                                // Increase the max string length that Tika will return.
+                                // Default might be too small for some large documents.
+                                TIKA.setMaxStringLength(-1);
                                 content = TIKA.parseToString(bis, metadata);
                             }
                         }
@@ -194,7 +191,7 @@ public class Main {
                     }
                 }
 
-                int count = countMatches(content, keyword, fuzzy);
+                int count = countMatches(content, keyword, mode);
                 if (count > 0) {
                     results.put(current.url, count);
                 }
@@ -255,12 +252,24 @@ public class Main {
         }
     }
 
-    private static int countMatches(String text, String keyword, boolean fuzzy) {
+    private static int countMatches(String text, String keyword, String mode) {
         if (text == null || text.isEmpty() || keyword == null || keyword.isEmpty()) {
             return 0;
         }
-        // Always case-insensitive as per user request
-        if (!fuzzy) {
+
+        if (mode.equals("exact")) {
+            int count = 0;
+            // Case-sensitive, literal match
+            Pattern pattern = Pattern.compile(Pattern.quote(keyword));
+            Matcher matcher = pattern.matcher(text);
+            while (matcher.find()) {
+                count++;
+            }
+            return count;
+        } else if (mode.equals("fuzzy")) {
+            return countFuzzyMatches(text, keyword);
+        } else {
+            // Default: case-insensitive
             int count = 0;
             Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
             Matcher matcher = pattern.matcher(text);
@@ -268,8 +277,6 @@ public class Main {
                 count++;
             }
             return count;
-        } else {
-            return countFuzzyMatches(text, keyword);
         }
     }
 
