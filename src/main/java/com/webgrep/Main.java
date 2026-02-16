@@ -20,48 +20,105 @@ import java.util.regex.Pattern;
  **/
 public class Main {
     private static Tika TIKA;
-    private static final int MAX_PAGES = 5000;
-    private static final int MAX_LINKS_PER_PAGE = 5000; // Further increased limit
-    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    private static int MAX_PAGES = 5000;
+    private static final int MAX_LINKS_PER_PAGE = 5000;
+    private static long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    private static int TIMEOUT_MS = 20000;
+    private static boolean ALLOW_EXTERNAL = false;
+    private static boolean INSECURE = false;
+    private static String OUTPUT_FORMAT = "text";
 
     public static void main(String[] args) {
         setupLogging();
         TIKA = new Tika();
-        setupSsl();
-        if (args.length < 3) {
-            System.out.println("Usage: java -jar WebGrep.jar <URL> <keyword> <depth> [fuzzy|exact]");
+
+        Map<String, String> params = parseArgs(args);
+        if (params.containsKey("help") || args.length == 0) {
+            printHelp();
             return;
         }
 
-        String startUrl = args[0];
-        String keyword = args[1];
-        int maxDepth;
-        try {
-            maxDepth = Integer.parseInt(args[2]);
-        } catch (NumberFormatException e) {
-            System.err.println("Depth must be an integer.");
+        String startUrl = params.get("url");
+        String keyword = params.get("keyword");
+        if (startUrl == null || keyword == null) {
+            System.err.println("Error: --url and --keyword are required.");
+            printHelp();
             return;
         }
 
-        String mode = args.length >= 4 ? args[3].toLowerCase() : "default";
+        int maxDepth = Integer.parseInt(params.getOrDefault("depth", "1"));
+        String mode = params.getOrDefault("mode", "default");
+        MAX_PAGES = Integer.parseInt(params.getOrDefault("max-pages", "5000"));
+        MAX_FILE_SIZE = Long.parseLong(params.getOrDefault("max-bytes", String.valueOf(10 * 1024 * 1024)));
+        TIMEOUT_MS = Integer.parseInt(params.getOrDefault("timeout-ms", "20000"));
+        ALLOW_EXTERNAL = params.containsKey("allow-external");
+        INSECURE = params.containsKey("insecure");
+        OUTPUT_FORMAT = params.getOrDefault("output", "text").toLowerCase();
+
+        if (INSECURE) {
+            setupSsl();
+        }
 
         CrawlResult crawlResult = crawl(normalizeUrl(startUrl, null), keyword, maxDepth, mode);
-        Map<String, Integer> results = crawlResult.results;
+        
+        if ("json".equals(OUTPUT_FORMAT)) {
+            printJsonOutput(crawlResult, startUrl, keyword, maxDepth, mode);
+        } else {
+            printTextOutput(crawlResult);
+        }
+    }
 
-        int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
-        System.out.println("Total count: " + totalCount);
-        if (totalCount > 0) {
-            System.out.println("Found in:");
-            // Sort by URL to help see subcategories/structure better
-            List<String> sortedUrls = new ArrayList<>(results.keySet());
-            Collections.sort(sortedUrls);
-
-            for (String url : sortedUrls) {
-                int count = results.get(url);
-                if (count > 0) {
-                    System.out.println(url + " (" + count + ")");
+    private static Map<String, String> parseArgs(String[] args) {
+        Map<String, String> params = new HashMap<>();
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].startsWith("--")) {
+                String key = args[i].substring(2);
+                if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+                    params.put(key, args[i + 1]);
+                    i++;
+                } else {
+                    params.put(key, "true");
                 }
+            } else if (args[i].equals("-h")) {
+                params.put("help", "true");
             }
+        }
+        return params;
+    }
+
+    private static void printHelp() {
+        System.out.println("WebGrep - A simple web crawler and keyword searcher");
+        System.out.println("\nUsage: java -jar WebGrep.jar --url <URL> --keyword <keyword> [options]");
+        System.out.println("\nOptions:");
+        System.out.println("  --url <URL>          The starting URL (required)");
+        System.out.println("  --keyword <word>     The keyword to search for (required)");
+        System.out.println("  --depth <n>          Maximum crawl depth (default: 1)");
+        System.out.println("  --mode <mode>        Match mode: default (case-insensitive), exact, or fuzzy");
+        System.out.println("  --max-pages <n>      Maximum number of pages to crawl (default: 5000)");
+        System.out.println("  --max-bytes <n>      Maximum file size in bytes (default: 10MB)");
+        System.out.println("  --timeout-ms <n>     Request timeout in milliseconds (default: 20000)");
+        System.out.println("  --allow-external     Allow crawling external domains");
+        System.out.println("  --insecure           Trust all SSL certificates (dangerous)");
+        System.out.println("  --output <format>    Output format: text (default) or json");
+        System.out.println("  -h, --help           Show this help message");
+    }
+
+    private static void printTextOutput(CrawlResult crawlResult) {
+        Map<String, Integer> results = crawlResult.results;
+        int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
+
+        System.out.println("--- WebGrep Results ---");
+        System.out.println("Total matches found: " + totalCount);
+        System.out.println("Pages visited: " + crawlResult.visitedCount);
+        System.out.println("Pages successfully parsed: " + crawlResult.parsedCount);
+        System.out.println("Pages skipped/failed: " + (crawlResult.visitedCount - crawlResult.parsedCount));
+        
+        if (totalCount > 0) {
+            System.out.println("\nFound in:");
+            results.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .forEach(entry -> System.out.println(entry.getKey() + " (" + entry.getValue() + ")"));
         }
 
         if (!crawlResult.blockedUrls.isEmpty()) {
@@ -70,6 +127,51 @@ public class Main {
                 System.out.println("Couldn't retrieve all links from the URL, blocked because of " + reason + ": " + url);
             });
         }
+    }
+
+    private static void printJsonOutput(CrawlResult crawlResult, String url, String keyword, int depth, String mode) {
+        StringBuilder json = new StringBuilder();
+        json.append("{\n");
+        json.append("  \"query\": {\n");
+        json.append("    \"url\": \"").append(escapeJson(url)).append("\",\n");
+        json.append("    \"keyword\": \"").append(escapeJson(keyword)).append("\",\n");
+        json.append("    \"depth\": ").append(depth).append(",\n");
+        json.append("    \"mode\": \"").append(escapeJson(mode)).append("\"\n");
+        json.append("  },\n");
+        json.append("  \"stats\": {\n");
+        json.append("    \"total_matches\": ").append(crawlResult.results.values().stream().mapToInt(Integer::intValue).sum()).append(",\n");
+        json.append("    \"pages_visited\": ").append(crawlResult.visitedCount).append(",\n");
+        json.append("    \"pages_parsed\": ").append(crawlResult.parsedCount).append(",\n");
+        json.append("    \"pages_blocked\": ").append(crawlResult.blockedUrls.size()).append("\n");
+        json.append("  },\n");
+        json.append("  \"results\": [\n");
+        
+        List<Map.Entry<String, Integer>> sortedResults = new ArrayList<>(crawlResult.results.entrySet());
+        sortedResults.sort(Map.Entry.<String, Integer>comparingByValue().reversed());
+        
+        for (int i = 0; i < sortedResults.size(); i++) {
+            Map.Entry<String, Integer> entry = sortedResults.get(i);
+            json.append("    { \"url\": \"").append(escapeJson(entry.getKey())).append("\", \"count\": ").append(entry.getValue()).append(" }");
+            if (i < sortedResults.size() - 1) json.append(",");
+            json.append("\n");
+        }
+        json.append("  ],\n");
+        json.append("  \"blocked\": [\n");
+        List<Map.Entry<String, String>> blockedList = new ArrayList<>(crawlResult.blockedUrls.entrySet());
+        for (int i = 0; i < blockedList.size(); i++) {
+            Map.Entry<String, String> entry = blockedList.get(i);
+            json.append("    { \"url\": \"").append(escapeJson(entry.getKey())).append("\", \"reason\": \"").append(escapeJson(entry.getValue())).append("\" }");
+            if (i < blockedList.size() - 1) json.append(",");
+            json.append("\n");
+        }
+        json.append("  ]\n");
+        json.append("}\n");
+        System.out.println(json.toString());
+    }
+
+    private static String escapeJson(String input) {
+        if (input == null) return "";
+        return input.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     private static void setupLogging() {
@@ -129,10 +231,16 @@ public class Main {
         Queue<UrlDepth> queue = new LinkedList<>();
 
         String normalizedStart = normalizeUrl(startUrl, null);
+        String startHost = "";
+        try {
+            startHost = new URL(normalizedStart).getHost();
+        } catch (Exception e) {}
+
         queue.add(new UrlDepth(normalizedStart, 0));
         visited.add(normalizedStart);
 
         int pagesCrawled = 0;
+        int pagesParsed = 0;
 
         while (!queue.isEmpty() && pagesCrawled < MAX_PAGES) {
             UrlDepth current = queue.poll();
@@ -146,7 +254,7 @@ public class Main {
                 List<String> links = new ArrayList<>();
 
                 org.jsoup.Connection.Response response = Jsoup.connect(current.url)
-                        .timeout(20000)
+                        .timeout(TIMEOUT_MS)
                         .followRedirects(true)
                         .ignoreContentType(true)
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
@@ -186,6 +294,7 @@ public class Main {
 
                 if (contentType != null && (contentType.contains("text/html") || contentType.contains("application/xhtml+xml"))) {
                     Document doc = response.parse();
+                    pagesParsed++;
 
                     if (doc.title().contains("Just a moment...") || doc.text().contains("Enable JavaScript and cookies to continue")) {
                         blockedUrls.put(current.url, "Cloudflare/Bot protection challenge");
@@ -206,9 +315,6 @@ public class Main {
                             metadata.set(org.apache.tika.metadata.HttpHeaders.CONTENT_TYPE, contentType);
                         }
 
-                        // Use Parser instead of Tika facade for more control if needed,
-                        // but Tika facade should work if configured correctly.
-                        // Ensure we use the shared instance and it's properly initialized.
                         TIKA.setMaxStringLength(-1);
                         content = TIKA.parseToString(bis, metadata);
 
@@ -218,9 +324,11 @@ public class Main {
                                 content = TIKA.parseToString(bis2);
                             }
                         }
+                        pagesParsed++;
                     } catch (Throwable t) {
                         // Fallback to UTF-8 if Tika fails
                         content = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+                        pagesParsed++;
                     }
                 }
 
@@ -231,6 +339,17 @@ public class Main {
 
                 if (current.depth < maxDepth) {
                     for (String link : links) {
+                        if (!ALLOW_EXTERNAL) {
+                            try {
+                                String linkHost = new URL(link).getHost();
+                                if (!linkHost.equalsIgnoreCase(startHost)) {
+                                    continue;
+                                }
+                            } catch (Exception e) {
+                                continue;
+                            }
+                        }
+
                         if (visited.size() < MAX_PAGES && !visited.contains(link)) {
                             visited.add(link);
                             queue.add(new UrlDepth(link, current.depth + 1));
@@ -247,7 +366,7 @@ public class Main {
             }
         }
 
-        return new CrawlResult(results, blockedUrls);
+        return new CrawlResult(results, blockedUrls, pagesCrawled, pagesParsed);
     }
 
     private static String extractTextFromHtml(Document doc) {
@@ -501,10 +620,14 @@ public class Main {
     private static class CrawlResult {
         Map<String, Integer> results;
         Map<String, String> blockedUrls;
+        int visitedCount;
+        int parsedCount;
 
-        CrawlResult(Map<String, Integer> results, Map<String, String> blockedUrls) {
+        CrawlResult(Map<String, Integer> results, Map<String, String> blockedUrls, int visitedCount, int parsedCount) {
             this.results = results;
             this.blockedUrls = blockedUrls;
+            this.visitedCount = visitedCount;
+            this.parsedCount = parsedCount;
         }
     }
 
