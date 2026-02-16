@@ -60,7 +60,7 @@ public class Main {
         }
 
         CrawlResult crawlResult = crawl(normalizeUrl(startUrl, null), keyword, maxDepth, mode);
-        
+
         if ("json".equals(OUTPUT_FORMAT)) {
             printJsonOutput(crawlResult, startUrl, keyword, maxDepth, mode);
         } else {
@@ -71,16 +71,37 @@ public class Main {
     private static Map<String, String> parseArgs(String[] args) {
         Map<String, String> params = new HashMap<>();
         for (int i = 0; i < args.length; i++) {
-            if (args[i].startsWith("--")) {
-                String key = args[i].substring(2);
-                if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+            String arg = args[i];
+            String key = null;
+            boolean hasValue = false;
+
+            if (arg.startsWith("--")) {
+                key = arg.substring(2);
+                hasValue = !key.equals("allow-external") && !key.equals("insecure") && !key.equals("help");
+            } else if (arg.startsWith("-") && arg.length() == 2) {
+                char shortFlag = arg.charAt(1);
+                switch (shortFlag) {
+                    case 'u': key = "url"; hasValue = true; break;
+                    case 'k': key = "keyword"; hasValue = true; break;
+                    case 'd': key = "depth"; hasValue = true; break;
+                    case 'm': key = "mode"; hasValue = true; break;
+                    case 'p': key = "max-pages"; hasValue = true; break;
+                    case 'b': key = "max-bytes"; hasValue = true; break;
+                    case 't': key = "timeout-ms"; hasValue = true; break;
+                    case 'e': key = "allow-external"; hasValue = false; break;
+                    case 'i': key = "insecure"; hasValue = false; break;
+                    case 'o': key = "output"; hasValue = true; break;
+                    case 'h': key = "help"; hasValue = false; break;
+                }
+            }
+
+            if (key != null) {
+                if (hasValue && i + 1 < args.length && !args[i + 1].startsWith("-")) {
                     params.put(key, args[i + 1]);
                     i++;
                 } else {
                     params.put(key, "true");
                 }
-            } else if (args[i].equals("-h")) {
-                params.put("help", "true");
             }
         }
         return params;
@@ -88,19 +109,19 @@ public class Main {
 
     private static void printHelp() {
         System.out.println("WebGrep - A simple web crawler and keyword searcher");
-        System.out.println("\nUsage: java -jar WebGrep.jar --url <URL> --keyword <keyword> [options]");
+        System.out.println("\nUsage: java -jar WebGrep.jar -u <URL> -k <keyword> [options]");
         System.out.println("\nOptions:");
-        System.out.println("  --url <URL>          The starting URL (required)");
-        System.out.println("  --keyword <word>     The keyword to search for (required)");
-        System.out.println("  --depth <n>          Maximum crawl depth (default: 1)");
-        System.out.println("  --mode <mode>        Match mode: default (case-insensitive), exact, or fuzzy");
-        System.out.println("  --max-pages <n>      Maximum number of pages to crawl (default: 5000)");
-        System.out.println("  --max-bytes <n>      Maximum file size in bytes (default: 10MB)");
-        System.out.println("  --timeout-ms <n>     Request timeout in milliseconds (default: 20000)");
-        System.out.println("  --allow-external     Allow crawling external domains");
-        System.out.println("  --insecure           Trust all SSL certificates (dangerous)");
-        System.out.println("  --output <format>    Output format: text (default) or json");
-        System.out.println("  -h, --help           Show this help message");
+        System.out.println("  -u, --url <URL>          The starting URL (required)");
+        System.out.println("  -k, --keyword <word>     The keyword to search for (required)");
+        System.out.println("  -d, --depth <n>          Maximum crawl depth (default: 1)");
+        System.out.println("  -m, --mode <mode>        Match mode: default (case-insensitive), exact, or fuzzy");
+        System.out.println("  -p, --max-pages <n>      Maximum number of pages to crawl (default: 5000)");
+        System.out.println("  -b, --max-bytes <n>      Maximum file size in bytes (default: 10MB)");
+        System.out.println("  -t, --timeout-ms <n>     Request timeout in milliseconds (default: 20000)");
+        System.out.println("  -e, --allow-external     Allow crawling external domains");
+        System.out.println("  -i, --insecure           Trust all SSL certificates (dangerous)");
+        System.out.println("  -o, --output <format>    Output format: text (default) or json");
+        System.out.println("  -h, --help               Show this help message");
     }
 
     private static void printTextOutput(CrawlResult crawlResult) {
@@ -112,7 +133,7 @@ public class Main {
         System.out.println("Pages visited: " + crawlResult.visitedCount);
         System.out.println("Pages successfully parsed: " + crawlResult.parsedCount);
         System.out.println("Pages skipped/failed: " + (crawlResult.visitedCount - crawlResult.parsedCount));
-        
+
         if (totalCount > 0) {
             System.out.println("\nFound in:");
             results.entrySet().stream()
@@ -145,10 +166,10 @@ public class Main {
         json.append("    \"pages_blocked\": ").append(crawlResult.blockedUrls.size()).append("\n");
         json.append("  },\n");
         json.append("  \"results\": [\n");
-        
+
         List<Map.Entry<String, Integer>> sortedResults = new ArrayList<>(crawlResult.results.entrySet());
         sortedResults.sort(Map.Entry.<String, Integer>comparingByValue().reversed());
-        
+
         for (int i = 0; i < sortedResults.size(); i++) {
             Map.Entry<String, Integer> entry = sortedResults.get(i);
             json.append("    { \"url\": \"").append(escapeJson(entry.getKey())).append("\", \"count\": ").append(entry.getValue()).append(" }");
@@ -244,7 +265,6 @@ public class Main {
 
         while (!queue.isEmpty() && pagesCrawled < MAX_PAGES) {
             UrlDepth current = queue.poll();
-            pagesCrawled++;
 
             try {
                 // Politeness delay
@@ -272,6 +292,8 @@ public class Main {
                         .header("Upgrade-Insecure-Requests", "1")
                         .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                         .execute();
+
+                pagesCrawled++;
 
                 String contentLengthHeader = response.header("Content-Length");
                 if (contentLengthHeader != null) {
@@ -497,8 +519,10 @@ public class Main {
             // Default: case-insensitive
             int count = 0;
             // Use UNICODE_CASE and CASE_INSENSITIVE for better international support
+            // Pre-process: some sites might have &nbsp; or other non-standard spaces
+            String processedText = text.replace('\u00A0', ' ');
             Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-            Matcher matcher = pattern.matcher(text);
+            Matcher matcher = pattern.matcher(processedText);
             while (matcher.find()) {
                 count++;
             }
@@ -592,10 +616,16 @@ public class Main {
         // Remove fragment for comparison
         int hashIdx = lower.indexOf('#');
         if (hashIdx != -1) {
-            lower = lower.substring(0, hashIdx);
-        }
+                lower = lower.substring(0, hashIdx);
+            }
 
-        // Only ignore clearly non-content static assets.
+            // Also remove query parameters for link ignore check (don't ignore based on query)
+            int queryIdx = lower.indexOf('?');
+            if (queryIdx != -1) {
+                lower = lower.substring(0, queryIdx);
+            }
+
+            // Only ignore clearly non-content static assets.
         // Be careful not to ignore .php, .aspx, .jsp etc.
         // Also ensure we don't ignore files that might contain text like .pdf, .doc, etc.
         if (lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".txt")) {

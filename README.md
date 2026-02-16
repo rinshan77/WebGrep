@@ -20,16 +20,16 @@ java -jar target/WebGrep-1.0-SNAPSHOT.jar --url <URL> --keyword <keyword> [optio
 ```
 
 #### Options:
-- `--url <URL>`: The starting URL (required).
-- `--keyword <word>`: The keyword to search for (required).
-- `--depth <n>`: Maximum crawl depth (default: 1).
-- `--mode <mode>`: Match strategy (`default`, `exact`, `fuzzy`).
-- `--max-pages <n>`: Stop after crawling N pages (default: 5000).
-- `--max-bytes <n>`: Skip files larger than N bytes (default: 10MB).
-- `--timeout-ms <n>`: Network timeout per request (default: 20000ms).
-- `--allow-external`: Allow the crawler to leave the starting domain.
-- `--insecure`: Disable SSL certificate verification (use with caution).
-- `--output <format>`: Output format (`text` or `json`).
+- `-u, --url <URL>`: The starting URL (required).
+- `-k, --keyword <word>`: The keyword to search for (required).
+- `-d, --depth <n>`: Maximum crawl depth (default: 1).
+- `-m, --mode <mode>`: Match strategy (`default`, `exact`, `fuzzy`).
+- `-p, --max-pages <n>`: Stop after crawling N pages (default: 5000).
+- `-b, --max-bytes <n>`: Skip files larger than N bytes (default: 10MB).
+- `-t, --timeout-ms <n>`: Network timeout per request (default: 20000ms).
+- `-e, --allow-external`: Allow the crawler to leave the starting domain.
+- `-i, --insecure`: Disable SSL certificate verification (use with caution).
+- `-o, --output <format>`: Output format (`text` or `json`).
 - `-h, --help`: Show help message.
 
 ### Matching Modes
