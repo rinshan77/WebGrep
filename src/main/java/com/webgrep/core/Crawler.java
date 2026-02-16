@@ -23,7 +23,7 @@ public class Crawler {
         this.extractor = extractor;
         this.matchEngine = matchEngine;
         this.startHost = extractHost(UrlUtils.normalizeUrl(options.getUrl(), null));
-        
+
         if (options.isInsecure()) {
             setupSsl();
         }
@@ -51,7 +51,7 @@ public class Crawler {
 
             try {
                 Thread.sleep(100);
-                
+
                 org.jsoup.Connection.Response response = Jsoup.connect(current.url)
                         .timeout(options.getTimeoutMs())
                         .followRedirects(true)

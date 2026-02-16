@@ -19,10 +19,10 @@ public class MainTest {
     @Test
     public void testMatchEngine() {
         MatchEngine engine = new MatchEngine();
-        
+
         // Default mode (case-insensitive)
         assertEquals(2, engine.countMatches("Hello world, hello!", "hello", "default"));
-        
+
         // Exact mode
         assertEquals(1, engine.countMatches("Hello world, hello!", "hello", "exact"));
         assertEquals(0, engine.countMatches("Hello world", "HELLO", "exact"));
@@ -38,13 +38,13 @@ public class MainTest {
         assertEquals("cafe", engine.superSimplify("Café"));
         assertEquals("helloworld123", engine.superSimplify("Hello-World_123!"));
     }
-    
+
     @Test
     public void testCliOptions() {
         String[] args = {"-u", "http://example.com", "-k", "test", "-d", "2", "-m", "exact"};
         CliOptions options = CliOptions.parse(args);
         options.validate();
-        
+
         assertEquals("http://example.com", options.getUrl());
         assertEquals("test", options.getKeyword());
         assertEquals(2, options.getDepth());

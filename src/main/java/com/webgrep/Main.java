@@ -24,7 +24,7 @@ public class Main {
             CliOptions options = CliOptions.parse(args);
 
             if (options.isHelp() || args.length == 0) {
-                printHelp();
+                CliOptions.printHelp();
                 return;
             }
 
@@ -64,22 +64,5 @@ public class Main {
             Logger rootLogger = Logger.getLogger("");
             rootLogger.setLevel(Level.OFF);
         } catch (Exception ignored) {}
-    }
-
-    private static void printHelp() {
-        System.out.println("WebGrep - A high-performance web crawler and keyword searcher");
-        System.out.println("\nUsage: java -jar WebGrep.jar -u <URL> -k <keyword> [options]");
-        System.out.println("\nOptions:");
-        System.out.println("  -u, --url <URL>          The starting URL (required)");
-        System.out.println("  -k, --keyword <word>     The keyword to search for (required)");
-        System.out.println("  -d, --depth <n>          Maximum crawl depth (default: 1)");
-        System.out.println("  -m, --mode <mode>        Match mode: default, exact, or fuzzy");
-        System.out.println("  -p, --max-pages <n>      Maximum number of pages to crawl (default: 5000)");
-        System.out.println("  -b, --max-bytes <n>      Maximum file size in bytes (default: 10MB)");
-        System.out.println("  -t, --timeout-ms <n>     Request timeout in milliseconds (default: 20000)");
-        System.out.println("  -e, --allow-external     Allow crawling external domains");
-        System.out.println("  -i, --insecure           Trust all SSL certificates (dangerous)");
-        System.out.println("  -o, --output <format>    Output format: text (default) or json");
-        System.out.println("  -h, --help               Show this help message");
     }
 }
