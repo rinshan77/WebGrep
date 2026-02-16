@@ -17,7 +17,7 @@ WebGrep is designed with a modular architecture for high performance and maintai
 
 ### Usage
 ```bash
-java -jar target/WebGrep-1.0-SNAPSHOT.jar --url <URL> --keyword <keyword> [options]
+java -jar WebGrep.jar --url <URL> --keyword <keyword> [options]
 ```
 
 #### Options:
