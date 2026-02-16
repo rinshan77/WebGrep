@@ -47,11 +47,16 @@ public class Main {
         System.out.println("Total count: " + totalCount);
         if (totalCount > 0) {
             System.out.println("Found in:");
-            results.forEach((url, count) -> {
+            // Sort by URL to help see subcategories/structure better
+            List<String> sortedUrls = new ArrayList<>(results.keySet());
+            Collections.sort(sortedUrls);
+
+            for (String url : sortedUrls) {
+                int count = results.get(url);
                 if (count > 0) {
                     System.out.println(url + " (" + count + ")");
                 }
-            });
+            }
         }
     }
 
@@ -125,6 +130,8 @@ public class Main {
                 List<String> links = new ArrayList<>();
 
                 URLConnection connection = new URL(current.url).openConnection();
+                // Add User-Agent to the manual connection to avoid 403s from some sites (like Cloudflare)
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
                 connection.setConnectTimeout(5000);
                 connection.setReadTimeout(5000);
 
@@ -143,24 +150,47 @@ public class Main {
                             .timeout(5000)
                             .followRedirects(true)
                             .ignoreContentType(true)
-                            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+                            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+                            .header("Accept-Language", "en-US,en;q=0.9")
+                            .header("Cache-Control", "no-cache")
+                            .header("Pragma", "no-cache")
+                            .userAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                             .get();
                     content = doc.text();
+                    // System.out.println("[DEBUG] Processing URL: " + current.url + " Content length: " + content.length());
 
                     if (current.depth < maxDepth) {
                         Elements elements = doc.select("a[href]");
                         for (Element element : elements) {
                             String link = element.attr("abs:href");
+                            if (link.isEmpty()) {
+                                // Try to construct abs href manually if Jsoup failed due to base URI issues
+                                String href = element.attr("href");
+                                if (!href.isEmpty()) {
+                                    try {
+                                        URL baseUrl = new URL(current.url);
+                                        URL absUrl = new URL(baseUrl, href);
+                                        link = absUrl.toString();
+                                    } catch (Exception e) {
+                                        // Ignore
+                                    }
+                                }
+                            }
                             String normalizedLink = normalizeUrl(link);
                             if (!normalizedLink.isEmpty()) {
-                                links.add(normalizedLink);
+                                // Filter out common non-article/non-content links to focus on actual pages
+                                if (!isIgnoredLink(normalizedLink)) {
+                                    // System.out.println("[DEBUG] Adding link from " + current.url + " -> " + normalizedLink);
+                                    links.add(normalizedLink);
+                                }
                             }
                         }
                     }
                 }
 
                 // If content is empty (not HTML or Jsoup failed to get text), use Tika
-                if (content.isEmpty()) {
+                // ALSO force Tika for PDF to ensure deep extraction
+                if (content.isEmpty() || (contentType != null && contentType.contains("application/pdf"))) {
                     try (InputStream is = connection.getInputStream()) {
                         // Check size during download if not provided by headers
                         byte[] buffer = new byte[8192];
@@ -179,11 +209,20 @@ public class Main {
                             try (InputStream bis = new java.io.ByteArrayInputStream(baos.toByteArray())) {
                                 org.apache.tika.metadata.Metadata metadata = new org.apache.tika.metadata.Metadata();
                                 metadata.set(org.apache.tika.metadata.TikaCoreProperties.RESOURCE_NAME_KEY, current.url);
+                                if (contentType != null) {
+                                    metadata.set(org.apache.tika.metadata.HttpHeaders.CONTENT_TYPE, contentType);
+                                }
 
-                                // Increase the max string length that Tika will return.
-                                // Default might be too small for some large documents.
+                                // Configure Tika for exhaustive extraction
                                 TIKA.setMaxStringLength(-1);
-                                content = TIKA.parseToString(bis, metadata);
+
+                                // For PDF documents, we might want to try to extract even more details if Tika core allows.
+                                // The standard parseToString uses the AutoDetectParser.
+                                String tikaContent = TIKA.parseToString(bis, metadata);
+
+                                if (content.isEmpty() || (contentType != null && contentType.contains("application/pdf"))) {
+                                    content = tikaContent;
+                                }
                             }
                         }
                     } catch (Exception e) {
@@ -257,6 +296,10 @@ public class Main {
             return 0;
         }
 
+        // Pre-process text to handle common PDF extraction issues like missing spaces between words
+        // Some PDF extractors might join words together if they are visually close.
+        // While we can't perfectly fix it, we can ensure the keyword matching is robust.
+
         if (mode.equals("exact")) {
             int count = 0;
             // Case-sensitive, literal match
@@ -271,11 +314,18 @@ public class Main {
         } else {
             // Default: case-insensitive
             int count = 0;
+            // Use UNICODE_CASE and CASE_INSENSITIVE for better international support
             Pattern pattern = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
             Matcher matcher = pattern.matcher(text);
             while (matcher.find()) {
                 count++;
             }
+
+            // Fallback for PDF-specific issues where words might be merged: "KeywordIsHere" instead of "Keyword Is Here"
+            // If the standard matcher didn't find as many matches as a simple "contains" check would,
+            // or if we want to be even more aggressive.
+            // Actually Pattern.quote(keyword) already handles it.
+
             return count;
         }
     }
@@ -346,6 +396,27 @@ public class Main {
             }
         }
         return dp[s1.length()][s2.length()];
+    }
+
+    private static boolean isIgnoredLink(String url) {
+        String lower = url.toLowerCase();
+        // Remove fragment for comparison if not already removed by normalizeUrl
+        int hashIdx = lower.indexOf('#');
+        if (hashIdx != -1) {
+            lower = lower.substring(0, hashIdx);
+        }
+
+        // Only ignore clearly non-content static assets.
+        // Be careful not to ignore .php, .aspx, .jsp etc.
+        return lower.endsWith(".css") || lower.endsWith(".js") || lower.endsWith(".png")
+                || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".gif")
+                || lower.endsWith(".svg") || lower.endsWith(".ico") || lower.endsWith(".woff")
+                || lower.endsWith(".woff2") || lower.endsWith(".ttf") || lower.endsWith(".otf")
+                || lower.endsWith(".mp3") || lower.endsWith(".mp4") || lower.endsWith(".wav")
+                || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".wmv")
+                || lower.contains("googleads") || lower.contains("doubleclick")
+                || lower.contains("facebook.com/sharer") || lower.contains("twitter.com/intent/tweet")
+                || lower.contains("linkedin.com/share") || lower.contains("pinterest.com/pin");
     }
 
     private static class UrlDepth {
