@@ -45,7 +45,7 @@ public class Main {
 
         String mode = args.length >= 4 ? args[3].toLowerCase() : "default";
 
-        Map<String, Integer> results = crawl(normalizeUrl(startUrl), keyword, maxDepth, mode);
+        Map<String, Integer> results = crawl(normalizeUrl(startUrl, null), keyword, maxDepth, mode);
 
         int totalCount = results.values().stream().mapToInt(Integer::intValue).sum();
         System.out.println("Total count: " + totalCount);
@@ -119,7 +119,7 @@ public class Main {
         Set<String> visited = new HashSet<>();
         Queue<UrlDepth> queue = new LinkedList<>();
 
-        String normalizedStart = normalizeUrl(startUrl);
+        String normalizedStart = normalizeUrl(startUrl, null);
         queue.add(new UrlDepth(normalizedStart, 0));
         visited.add(normalizedStart);
 
@@ -190,18 +190,12 @@ public class Main {
                             String link = element.absUrl("href");
                             if (link.isEmpty()) {
                                 link = element.attr("href");
-                                if (!link.isEmpty() && !link.startsWith("http") && !link.startsWith("mailto:") && !link.startsWith("tel:")) {
-                                    try {
-                                        URL baseUrl = new URL(current.url);
-                                        URL absUrl = new URL(baseUrl, link);
-                                        link = absUrl.toString();
-                                    } catch (Exception e) {
-                                        // Ignore
-                                    }
-                                }
                             }
-                            String normalizedLink = normalizeUrl(link);
+                            String normalizedLink = normalizeUrl(link, current.url);
                             if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                                if (normalizedLink.contains("klix.ba")) {
+                                     System.err.println("Extracted: " + normalizedLink);
+                                }
                                 links.add(normalizedLink);
                             }
                         }
@@ -212,16 +206,9 @@ public class Main {
                             Matcher linkMatcher = linkPattern.matcher(response.body());
                             while (linkMatcher.find() && links.size() < MAX_LINKS_PER_PAGE) {
                                 String href = linkMatcher.group(1);
-                                if (!href.startsWith("http") && !href.startsWith("mailto:") && !href.startsWith("tel:")) {
-                                    try {
-                                        URL baseUrl = new URL(current.url);
-                                        URL absUrl = new URL(baseUrl, href);
-                                        String link = absUrl.toString();
-                                        String normalizedLink = normalizeUrl(link);
-                                        if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
-                                            links.add(normalizedLink);
-                                        }
-                                    } catch (Exception e) {}
+                                String normalizedLink = normalizeUrl(href, current.url);
+                                if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
+                                    links.add(normalizedLink);
                                 }
                             }
                         }
@@ -275,26 +262,49 @@ public class Main {
         return results;
     }
 
-    private static String normalizeUrl(String urlString) {
+    private static String normalizeUrl(String urlString, String baseUrlString) {
         if (urlString == null || urlString.isEmpty()) {
             return "";
         }
-        String original = urlString;
+        if (urlString.startsWith("//")) {
+            if (baseUrlString != null && baseUrlString.startsWith("https")) {
+                urlString = "https:" + urlString;
+            } else {
+                urlString = "http:" + urlString;
+            }
+        }
         if (!urlString.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*")) {
-            urlString = "http://" + urlString;
+            if (baseUrlString != null && !baseUrlString.isEmpty()) {
+                try {
+                    URL base = new URL(baseUrlString);
+                    URL abs = new URL(base, urlString);
+                    urlString = abs.toString();
+                } catch (Exception e) {
+                    if (!urlString.startsWith("http")) {
+                        urlString = "http://" + urlString;
+                    }
+                }
+            } else if (!urlString.startsWith("http")) {
+                urlString = "http://" + urlString;
+            }
         }
         try {
             URL url = new URL(urlString);
             String protocol = url.getProtocol().toLowerCase();
             String host = url.getHost().toLowerCase();
+            if (host.isEmpty()) return "";
+
             int port = url.getPort();
             String path = url.getPath();
             String query = url.getQuery();
 
-            // Normalize trailing slash in path
+            // Normalize trailing slash in path if empty
             if (path.isEmpty()) {
                 path = "/";
             }
+
+            // Remove multiple slashes in path (except at beginning)
+            path = path.replaceAll("/{2,}", "/");
 
             StringBuilder sb = new StringBuilder();
             sb.append(protocol).append("://").append(host);
@@ -449,7 +459,9 @@ public class Main {
                 || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".wmv")
                 || lower.contains("googleads") || lower.contains("doubleclick")
                 || lower.contains("facebook.com/sharer") || lower.contains("twitter.com/intent/tweet")
-                || lower.contains("linkedin.com/share") || lower.contains("pinterest.com/pin");
+                || lower.contains("linkedin.com/share") || lower.contains("pinterest.com/pin")
+                || lower.contains("video.klix.ba") || lower.contains("static.klix.ba")
+                || lower.contains("sdk.privacy-center.org");
     }
 
     private static class UrlDepth {
