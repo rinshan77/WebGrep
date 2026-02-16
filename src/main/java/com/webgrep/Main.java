@@ -137,7 +137,7 @@ public class Main {
                 List<String> links = new ArrayList<>();
 
                 org.jsoup.Connection.Response response = Jsoup.connect(current.url)
-                        .timeout(15000)
+                        .timeout(20000)
                         .followRedirects(true)
                         .ignoreContentType(true)
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
@@ -193,9 +193,6 @@ public class Main {
                             }
                             String normalizedLink = normalizeUrl(link, current.url);
                             if (!normalizedLink.isEmpty() && !isIgnoredLink(normalizedLink)) {
-                                if (normalizedLink.contains("klix.ba")) {
-                                     System.err.println("Extracted: " + normalizedLink);
-                                }
                                 links.add(normalizedLink);
                             }
                         }
