@@ -145,7 +145,8 @@ public class Crawler {
         // Set Jsoup's cap one byte above the user limit so that a body truncated at exactly
         // maxBytes bytes is distinguishable from a legitimate response of that exact size.
         // The body-length check below uses > maxBytes (not >= maxBodySize) to detect truncation.
-        this.maxBodySize = (int) Math.min(options.getMaxBytes() + 1L, Integer.MAX_VALUE);
+        // Clamp maxBytes to INT_MAX-1 first so the +1 never overflows (e.g. --max-bytes Long.MAX_VALUE).
+        this.maxBodySize = (int) Math.min(options.getMaxBytes(), (long) Integer.MAX_VALUE - 1) + 1;
         this.dedup = new UrlDeduplicator(options.isAllUrls());
 
         if (options.isInsecure()) {

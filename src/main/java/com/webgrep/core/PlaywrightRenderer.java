@@ -314,7 +314,7 @@ public class PlaywrightRenderer implements AutoCloseable {
                     // relative URLs are resolved via the page's <base href> tag, not the page URL.
                     // Angular apps set <base href="/app/"> and use hrefs like "api/v1/..." - those
                     // would resolve incorrectly against the current route if we used getAttribute.
-                    "(base) => {"
+                    "() => {"
                     + "  const ls = [], ds = [];"
                     + "  for (const a of document.querySelectorAll('a[href]')) {"
                     + "    const raw = a.getAttribute('href') || '';"
@@ -333,7 +333,7 @@ public class PlaywrightRenderer implements AutoCloseable {
                     + "  if (wgClone) wgClone.querySelectorAll('script,style,noscript').forEach(n=>n.remove());"
                     + "  return { text: wgClone ? (wgClone.textContent || '') : '',"
                     + "           links: [...new Set(ls)], downloadLinks: [...new Set(ds)] };"
-                    + "}", url);
+                    + "}");
 
             String text = snapshot != null ? (String) snapshot.get("text") : "";
             @SuppressWarnings("unchecked")
@@ -522,18 +522,26 @@ public class PlaywrightRenderer implements AutoCloseable {
 
         // ── 3. Playwright's cached Firefox ────────────────────────────────────
         if (!wantChromium && isFirefoxCached()) {
-            System.err.printf("  SPA renderer: using Playwright Firefox%n");
-            initPlaywright();
-            browser = playwright.firefox().launch(new BrowserType.LaunchOptions().setHeadless(true));
-            return;
+            try {
+                initPlaywright();
+                browser = playwright.firefox().launch(new BrowserType.LaunchOptions().setHeadless(true));
+                System.err.printf("  SPA renderer: using Playwright Firefox%n");
+                return;
+            } catch (Exception e) {
+                cleanupPlaywright();
+            }
         }
 
         // ── 4. Playwright's cached Chromium ───────────────────────────────────
         if (!wantFirefox && isChromiumCached()) {
-            System.err.printf("  SPA renderer: using Playwright Chromium%n");
-            initPlaywright();
-            browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
-            return;
+            try {
+                initPlaywright();
+                browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
+                System.err.printf("  SPA renderer: using Playwright Chromium%n");
+                return;
+            } catch (Exception e) {
+                cleanupPlaywright();
+            }
         }
 
         // ── 5. Nothing found - ask user which browser to download ─────────────

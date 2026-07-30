@@ -418,29 +418,31 @@ public class ReportWriter {
      * <p>Handles the following characters: {@code \} → {@code \\}, {@code "} → {@code \"},
      * newline → {@code \n}, carriage return → {@code \r}, tab → {@code \t}, and any other
      * control character below U+0020 is written as a {@code \\u} Unicode escape sequence.
+     * Non-BMP code points (emoji, supplementary characters) are handled correctly by iterating
+     * over code points rather than {@code char} values, avoiding lone-surrogate emission.
      *
      * @param input the string to escape; {@code null} is treated as {@code ""}.
      * @return the escaped string, safe to embed between {@code "} characters in JSON.
      */
     private String escapeJson(String input) {
         if (input == null) return "";
-        StringBuilder sb = new StringBuilder();
-        for (char c : input.toCharArray()) {
-            switch (c) {
+        StringBuilder sb = new StringBuilder(input.length());
+        input.codePoints().forEach(cp -> {
+            switch (cp) {
                 case '\\' -> sb.append("\\\\");
                 case '"'  -> sb.append("\\\"");
                 case '\n' -> sb.append("\\n");
                 case '\r' -> sb.append("\\r");
                 case '\t' -> sb.append("\\t");
                 default   -> {
-                    if (c < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) c));
+                    if (cp < 0x20) {
+                        sb.append(String.format("\\u%04x", cp));
                     } else {
-                        sb.append(c);
+                        sb.appendCodePoint(cp);
                     }
                 }
             }
-        }
+        });
         return sb.toString();
     }
 }

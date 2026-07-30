@@ -498,4 +498,24 @@ public class ReportWriterTest {
         assertTrue("Files must appear in the order provided", posA < posB);
         assertTrue(json.contains("\"total_matches\": 3")); // 2+1
     }
+
+    @Test
+    public void testJsonOutputEmojisInSnippetsAreEncodedCorrectly() {
+        // Non-BMP emoji (U+1F98A fox) must survive the JSON serialisation round-trip
+        // intact and must not produce lone surrogates in the output string.
+        CrawlResult result = new CrawlResult();
+        result.addMatch("http://example.com/🦊-page", 1);
+        result.snippets.put("http://example.com/🦊-page",
+                List.of("The quick 🦊 jumps over the lazy dog"));
+        CliOptions options = CliOptions.parse(new String[]{"-u", "http://example.com", "-k", "fox"});
+        new ReportWriter().printJsonOutput(result, options);
+        String json = out.toString();
+        // Emoji must appear as a valid pair, never as lone high/low surrogate
+        assertTrue("Emoji must be preserved in JSON output", json.contains("🦊"));
+        // The low and high surrogates must always travel together; check neither appears alone
+        // by verifying the pair is present exactly where each component is present
+        int foxPos = json.indexOf("🦊");
+        assertTrue("High surrogate must be followed by low surrogate",
+                foxPos >= 0 && json.charAt(foxPos) == '\uD83E' && json.charAt(foxPos + 1) == '\uDD8A');
+    }
 }

@@ -898,6 +898,45 @@ public class MainTest {
                 com.webgrep.core.PlaywrightRenderer.isSpa(doc));
     }
 
+    @Test
+    public void testIsSpaWithBeastiesContainer() {
+        // Angular SSR optimiser adds data-beasties-container to the html element
+        String html = "<html data-beasties-container><head></head><body>content</body></html>";
+        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
+        assertTrue("data-beasties-container on <html> must trigger SPA detection",
+                com.webgrep.core.PlaywrightRenderer.isSpa(doc));
+    }
+
+    @Test
+    public void testIsSpaWithNuxtHead() {
+        // Nuxt.js adds data-n-head to the html element
+        String html = "<html data-n-head=\"ssr\"><head></head><body>Nuxt content</body></html>";
+        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
+        assertTrue("data-n-head on <html> must trigger SPA detection",
+                com.webgrep.core.PlaywrightRenderer.isSpa(doc));
+    }
+
+    @Test
+    public void testIsSpaWithDivApp() {
+        // Vue/React apps commonly mount to <div id="app"> with little static content
+        String html = "<html><head><script src='vendor.js'></script></head>"
+                + "<body><div id=\"app\">Loading</div></body></html>";
+        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(html);
+        assertTrue("div#app with short text must trigger SPA detection",
+                com.webgrep.core.PlaywrightRenderer.isSpa(doc));
+    }
+
+    @Test
+    public void testClassifyExceptionCoversMimeTypeAndFallback() {
+        CrawlResult result = new CrawlResult();
+        result.addNetworkError(new org.jsoup.UnsupportedMimeTypeException(
+                "Unhandled content type", "video/mp4", "http://example.com/video.mp4"));
+        result.addNetworkError(new RuntimeException("Connection reset by peer"));
+
+        assertEquals(1, (int) result.networkErrorReasons.get("Unsupported content type"));
+        assertEquals(1, (int) result.networkErrorReasons.get("Connection reset by peer"));
+    }
+
     // ── H-1: word-boundary false positives in default mode ───────────────────
 
     @Test
