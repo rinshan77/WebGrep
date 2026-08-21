@@ -241,6 +241,12 @@ private final SSLSocketFactory insecureSslFactory;
 
 The cookie jar is a two-level map scoped by host so that cookies from site A are never sent to site B when `--allow-external` is used.
 
+`cookiesFor(url)` applies the scoping rule:
+
+- When the seed had no `www.` prefix (`allowSubdomains == false`), cookies are pinned to the exact host that set them.
+- When the seed had `www.` (`allowSubdomains == true`), cookies are merged across every host under the seed's root domain, so a session token set on `www.example.com` is sent to `docs.example.com`. Both the source host *and* the target host must be inside that root domain, so an `--allow-external` hop to an unrelated site receives nothing. The suffix test is `host.equals(startDomain) || host.endsWith("." + startDomain)` - the leading dot is what stops `notexample.com` from matching `example.com`.
+- Host-specific cookies always win over the merged domain-wide set.
+
 `spaRenderingEnabled` is a three-state `Boolean` (boxed):
 - `null` - the user hasn't been asked yet
 - `true` - user said yes (or non-interactive mode)
@@ -688,7 +694,12 @@ Returns up to `maxSnippets` context strings - short excerpts from the text with 
 
 1. Flattens whitespace: replaces tabs, newlines, non-breaking spaces (U+00A0), and runs of spaces with single spaces, so the snippet fits neatly on one output line.
 2. Runs the regex match (same pattern used by `countMatches`). For each match position, calls `buildSnippet()`.
-3. If regex found nothing and mode is not `exact`, runs the simplified pass with a character position map to convert simplified-text positions back to original-text positions, so the snippet contains the original accented characters (not the stripped version). The same ASCII-special guard from `countMatches` applies in default mode; in fuzzy mode the guard is relaxed so that keywords like `node.js` find the same text that `countMatches` counted.
+3. While fewer than `maxSnippets` results have been collected and mode is not `exact`, runs the simplified pass with a character position map that converts simplified-text positions back to original-text positions, so the snippet contains the original accented characters (not the stripped version). It runs alongside the regex pass rather than only as a fallback, so text containing both a plain and an accented variant produces a snippet for each. The same ASCII-special guard from `countMatches` applies in default mode; in fuzzy mode the guard is relaxed so that keywords like `node.js` find the same text that `countMatches` counted.
+
+   The position map must simplify text by exactly the same rule as the pass it is mirroring, or a keyword can be counted without ever producing a snippet:
+
+   - **default mode** mirrors `simplifyWithSpaces`: every run of non-alphanumeric characters collapses to a single space, so `real-time` becomes `real time` and the multi-word keyword `real time` matches it. Combining marks contribute nothing (matching the `\p{M}` strip), so a decomposed `e` + U+0301 stays one character rather than becoming `e` plus a space.
+   - **fuzzy mode** mirrors `superSimplify`: non-alphanumeric characters are dropped entirely, spaces included.
 
 `buildSnippet(flat, start, end)` takes 60 characters before and after the match, then extends both ends to word boundaries (so snippets don't cut mid-word).
 
@@ -904,17 +915,18 @@ Document extensions (PDF, DOCX, etc.) are explicitly **not** ignored - `isDocume
 
 ## 15. Tests
 
-**Directory:** `src/test/java/com/webgrep/`
+**Directory:** `src/test/java/com/webgrep/`, plus `src/test/java/com/webgrep/core/` for tests that need package-private access.
 
 | File | What it tests |
 |---|---|
 | `AppIntegrationTest.java` | End-to-end integration: all three modes (web excluded - needs network), text and JSON output, all match modes, `--max-bytes`, `--max-hits`, Windows line endings, multiple matches per line |
 | `ContentExtractorTest.java` | HTML text extraction, Tika binary extraction, link extraction, edge cases |
-| `MainTest.java` | `UrlUtils` (normalizeUrl, isIgnoredLink), `MatchEngine` (countMatches, superSimplify, findSnippets), `CrawlResult` accumulation, `Main.findLineMatches` (page detection, truncation, multi-match lines), `CliOptions` parsing and validation edge cases |
-| `ReportWriterTest.java` | JSON escaping, duration formatting, blocked URL grouping, stopped-early output |
+| `MainTest.java` | `UrlUtils` (normalizeUrl, isIgnoredLink), `MatchEngine` (countMatches, superSimplify, findSnippets, count/snippet consistency), `CrawlResult` accumulation, `Main.findLineMatches` (page detection, truncation, multi-match lines), `CliOptions` parsing and validation edge cases |
+| `ReportWriterTest.java` | JSON escaping, duration formatting, blocked URL grouping, stopped-early output, text/JSON ordering parity |
 | `UrlDeduplicatorTest.java` | Dedup rules: superset detection, `--all-urls` mode, scheme normalisation, no-params base path handling |
+| `core/CrawlerTest.java` | Cookie scoping: subdomain sharing under a `www.` seed, host-exact pinning otherwise, and no leakage to unrelated or look-alike domains |
 
-All tests use JUnit 4. There are no mocks - `AppIntegrationTest` writes real temp files and calls `Main.main()` directly with stdout redirected to a `ByteArrayOutputStream` for assertions.
+All tests use JUnit 4. There are no mocks - `AppIntegrationTest` writes real temp files and calls `Main.main()` directly with stdout redirected to a `ByteArrayOutputStream` for assertions. `CrawlerTest` lives in the `com.webgrep.core` package so it can call `Crawler.storeCookies` and `Crawler.cookiesFor`, which are package-private for exactly this reason.
 
 ---
 

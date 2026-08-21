@@ -155,7 +155,10 @@ public class ReportWriter {
         json.append("  \"results\": [\n");
 
         List<Map.Entry<String, Integer>> sortedResults = new ArrayList<>(crawlResult.results.entrySet());
-        sortedResults.sort(Map.Entry.<String, Integer>comparingByValue().reversed());
+        // Same ordering as printTextOutput: count descending, then URL ascending. Without the
+        // URL tie-break the two formats listed equal-count pages in different orders.
+        sortedResults.sort(Map.Entry.<String, Integer>comparingByValue().reversed()
+                .thenComparing(Map.Entry.comparingByKey()));
 
         for (int i = 0; i < sortedResults.size(); i++) {
             Map.Entry<String, Integer> entry = sortedResults.get(i);

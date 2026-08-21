@@ -500,6 +500,24 @@ public class ReportWriterTest {
     }
 
     @Test
+    public void testJsonResultOrderMatchesTextOrderForEqualCounts() {
+        // Both formats sort by count descending, then URL ascending. Without the URL tie-break
+        // the JSON array kept crawl order and disagreed with the text listing.
+        CrawlResult result = new CrawlResult();
+        result.addMatch("http://example.com/zebra", 5);
+        result.addMatch("http://example.com/apple", 5);
+        result.addMatch("http://example.com/mango", 5);
+
+        new ReportWriter().printJsonOutput(result, sampleOptions());
+        String json = out.toString();
+        int apple = json.indexOf("/apple");
+        int mango = json.indexOf("/mango");
+        int zebra = json.indexOf("/zebra");
+        assertTrue("Equal counts must be ordered by URL: apple < mango < zebra",
+                apple < mango && mango < zebra);
+    }
+
+    @Test
     public void testJsonOutputEmojisInSnippetsAreEncodedCorrectly() {
         // Non-BMP emoji (U+1F98A fox) must survive the JSON serialisation round-trip
         // intact and must not produce lone surrogates in the output string.

@@ -298,18 +298,31 @@ public class Crawler {
                             continue;
                         }
 
-                        if (doc.title().contains("Just a moment...") || doc.text().contains("Enable JavaScript and cookies to continue")) {
+                        // Extract once and run the bot-challenge check against the result.
+                        // Calling doc.text() for the check walked the whole document a second
+                        // time, doubling text-extraction cost on every HTML page.
+                        content = extractor.extractTextFromHtml(doc);
+                        if (doc.title().contains("Just a moment...")
+                                || content.contains("Enable JavaScript and cookies to continue")) {
                             crawlResult.addBlocked(effectiveUrl, "Cloudflare/Bot protection challenge");
                             continue;
                         }
 
                         crawlResult.parsedCount++;
-                        content = extractor.extractTextFromHtml(doc);
                         // Split Jsoup links into document links (depth-free) and navigation links.
                         for (String l : extractor.extractLinks(doc, body, effectiveUrl)) {
                             if (UrlUtils.isDocumentLink(l)) docLinksToEnqueue.add(l);
                             else navLinks.add(l);
                         }
+
+                        // A zero-delay <meta http-equiv="refresh"> is an immediate navigation in
+                        // any browser, but Jsoup's followRedirects only covers HTTP 3xx. Such a
+                        // stub page carries no text and often no <a href> either, so without this
+                        // the crawl reports zero matches with nothing to explain why. Enqueued
+                        // depth-free because it is the same logical page, not a new crawl level;
+                        // the deduplicator stops refresh loops.
+                        String refreshTarget = metaRefreshTarget(doc, effectiveUrl);
+                        if (refreshTarget != null) docLinksToEnqueue.add(refreshTarget);
 
                         if (!Boolean.FALSE.equals(spaRenderingEnabled) && PlaywrightRenderer.isSpa(doc)) {
                             if (spaRenderingEnabled == null) {
@@ -470,6 +483,49 @@ public class Crawler {
     }
 
     /**
+     * Extracts the target of a zero-delay {@code <meta http-equiv="refresh">} tag, if present.
+     *
+     * <p>Only an immediate refresh (delay {@code 0}) is treated as a redirect. A page that
+     * refreshes itself after a delay - a live scoreboard, a "returning to home in 30 seconds"
+     * notice - is a normal page, and following that target would add noise rather than content.
+     *
+     * <p>Package-private so unit tests can exercise the parsing rules directly.
+     *
+     * @param doc     the parsed HTML document.
+     * @param baseUrl the canonical URL of the page, used to resolve a relative target.
+     * @return the normalised absolute redirect target, or {@code null} if there is no usable
+     *         zero-delay refresh.
+     */
+    static String metaRefreshTarget(Document doc, String baseUrl) {
+        org.jsoup.nodes.Element el = doc.selectFirst("meta[http-equiv=refresh]");
+        if (el == null) return null;
+
+        String content = el.attr("content");
+        int semicolon = content.indexOf(';');
+        if (semicolon < 0) return null;
+        try {
+            if (Double.parseDouble(content.substring(0, semicolon).trim()) > 0) return null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+
+        String rest = content.substring(semicolon + 1).trim();
+        if (!rest.regionMatches(true, 0, "url", 0, 3)) return null;
+        int equals = rest.indexOf('=');
+        if (equals < 0) return null;
+        String raw = rest.substring(equals + 1).trim();
+        if (raw.length() >= 2 && (raw.charAt(0) == '"' || raw.charAt(0) == '\'')) {
+            int close = raw.indexOf(raw.charAt(0), 1);
+            raw = close > 0 ? raw.substring(1, close) : raw.substring(1);
+        }
+        if (raw.isEmpty()) return null;
+
+        String target = UrlUtils.normalizeUrl(raw, baseUrl);
+        if (target.isEmpty() || UrlUtils.isIgnoredLink(target) || target.equals(baseUrl)) return null;
+        return target;
+    }
+
+    /**
      * Parses the {@code Retry-After} HTTP response header into a wait duration in milliseconds.
      *
      * <p>Only the integer-seconds form of {@code Retry-After} is handled (date-string form is
@@ -572,24 +628,40 @@ public class Crawler {
      * <p>Looks up the cookie jar by the hostname extracted from {@code url}. If no cookies
      * have been set for that host, returns an empty map.
      *
+     * <p>Package-private (not private) so that unit tests can verify cookie scoping directly.
+     *
      * @param url the URL to retrieve cookies for.
      * @return the cookie map for that host; never {@code null}.
      */
-    private Map<String, String> cookiesFor(String url) {
+    Map<String, String> cookiesFor(String url) {
         String host = extractHost(url);
-        if (!allowSubdomains || cookieJar.size() <= 1) {
-            return cookieJar.getOrDefault(host, Map.of());
+        Map<String, String> hostJar = cookieJar.getOrDefault(host, Map.of());
+        // Subdomain merging only applies when the *target* host is itself inside the seed's
+        // root domain. Without that check, an --allow-external hop to an unrelated site would
+        // be sent the seed domain's session cookies.
+        if (!allowSubdomains || !isWithinStartDomain(host)) {
+            return hostJar;
         }
-        // When crawling subdomains (seed was www.*), merge cookies from all hosts under
-        // the same root domain so session tokens set on one subdomain are sent to others.
+        // Seed was www.*: merge cookies from every host under the same root domain so session
+        // tokens set on one subdomain are sent to the others.
         Map<String, String> merged = new HashMap<>();
         cookieJar.forEach((h, jar) -> {
-            if (h.equals(startDomain) || h.endsWith("." + startDomain)) merged.putAll(jar);
+            if (isWithinStartDomain(h)) merged.putAll(jar);
         });
         // Host-specific cookies win over broader domain cookies.
-        Map<String, String> hostJar = cookieJar.get(host);
-        if (hostJar != null) merged.putAll(hostJar);
+        merged.putAll(hostJar);
         return merged.isEmpty() ? Map.of() : Collections.unmodifiableMap(merged);
+    }
+
+    /**
+     * Returns {@code true} if {@code host} is {@link #startDomain} itself or one of its
+     * subdomains. Used to scope cookie sharing to the seed's root domain.
+     *
+     * @param host a lowercased hostname.
+     * @return {@code true} if the host belongs to the seed's root domain.
+     */
+    private boolean isWithinStartDomain(String host) {
+        return host.equals(startDomain) || host.endsWith("." + startDomain);
     }
 
     /**
@@ -598,10 +670,13 @@ public class Crawler {
      * <p>Cookies are merged (not replaced) so that a new response adds to existing cookies
      * rather than overwriting the whole jar for a host.
      *
+     * <p>Package-private (not private) so that unit tests can seed the jar before asserting
+     * on {@link #cookiesFor(String)}.
+     *
      * @param url     the URL the response came from; the hostname is used as the jar key.
      * @param cookies the {@code name → value} cookie map from the response.
      */
-    private void storeCookies(String url, Map<String, String> cookies) {
+    void storeCookies(String url, Map<String, String> cookies) {
         if (cookies.isEmpty()) return;
         String host = extractHost(url);
         if (host.isEmpty()) return;

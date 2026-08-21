@@ -57,7 +57,7 @@ public class PlaywrightRenderer implements AutoCloseable {
      * to avoid false positives.
      */
     private static final Pattern JSON_DOWNLOAD_URL = Pattern.compile(
-            "\"((?:https?://[^\"\\s\"]{4,}|/[^\"\\s\"]{4,})/download)\"",
+            "\"((?:https?://[^\"\\s]{4,}|/[^\"\\s]{4,})/download)\"",
             Pattern.CASE_INSENSITIVE);
 
     /** The Playwright instance that manages the browser process. Recreated after disconnects. */
@@ -331,7 +331,14 @@ public class PlaywrightRenderer implements AutoCloseable {
                     + "  ) || document.body;"
                     + "  const wgClone = wgRoot ? wgRoot.cloneNode(true) : null;"
                     + "  if (wgClone) wgClone.querySelectorAll('script,style,noscript').forEach(n=>n.remove());"
-                    + "  return { text: wgClone ? (wgClone.textContent || '') : '',"
+                    // Title and meta tags are included so the rendered text covers the same
+                    // fields as ContentExtractor.extractTextFromHtml does for plain HTML pages.
+                    + "  const wgAttr = s => { const e = document.querySelector(s);"
+                    + "                        return e ? (e.getAttribute('content') || '') : ''; };"
+                    + "  const wgBody = wgClone ? (wgClone.textContent || '') : '';"
+                    + "  return { text: (document.title || '') + ' ' + wgBody + ' '"
+                    + "                 + wgAttr('meta[name=description]') + ' '"
+                    + "                 + wgAttr('meta[name=keywords]'),"
                     + "           links: [...new Set(ls)], downloadLinks: [...new Set(ds)] };"
                     + "}");
 
@@ -761,14 +768,20 @@ public class PlaywrightRenderer implements AutoCloseable {
      * <p>Used to determine whether a new navigation requires a fresh browser context
      * (different domain) or can reuse the existing one (same domain).
      *
+     * <p>A non-default port is included, both so that two services on the same host are given
+     * separate browser contexts and so that root-relative document URLs found in intercepted
+     * JSON responses are prefixed with the port they actually live on.
+     *
      * @param url the full URL.
-     * @return the scheme+host string, e.g. {@code "https://example.com"};
-     *         or {@code ""} if the URL is malformed.
+     * @return the scheme+host(+port) string, e.g. {@code "https://example.com"} or
+     *         {@code "http://localhost:3000"}; or {@code ""} if the URL is malformed.
      */
     private static String baseUrl(String url) {
         try {
             URL u = new URL(url);
-            return u.getProtocol() + "://" + u.getHost();
+            int port = u.getPort();
+            String portPart = (port != -1 && port != u.getDefaultPort()) ? ":" + port : "";
+            return u.getProtocol() + "://" + u.getHost() + portPart;
         } catch (MalformedURLException e) {
             return "";
         }

@@ -55,7 +55,7 @@ java -jar WebGrep.jar -F <path> -k <keyword> [options]
 ### Options
 
 **Input (exactly one required):**
-- `-u, --url <URL>`: The starting URL for a web crawl.
+- `-u, --url <URL>`: The starting URL for a web crawl. The scheme is optional and defaults to `http://`, so `example.com/docs` and `localhost:8080` both work.
 - `-f, --file <path>`: Search a single local file. Supports all formats Apache Tika understands (PDF, DOCX, TXT, and more).
 - `-F, --folder <path>`: Recursively search all files in a local directory. Results are grouped by file.
 

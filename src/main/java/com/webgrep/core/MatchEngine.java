@@ -117,7 +117,8 @@ public class MatchEngine {
                 // a single letter don't flood results. (ASCII-special keywords are already
                 // excluded by hasAsciiSpecialChars above; this guard handles the rare case of
                 // a keyword that simplifies to a single alphanumeric char.)
-                if (simpleKeyword.length() >= 2) {
+                if (simpleKeyword.length() >= 2
+                        && !simplifiedPassIsRedundant(text, simpleKeyword, keyword)) {
                     String simpleText = simplifyWithSpaces(text);
                     int simpleCount = 0;
                     int idx = 0;
@@ -163,10 +164,7 @@ public class MatchEngine {
     public List<String> findSnippets(String text, String keyword, String mode, int maxSnippets) {
         if (text == null || text.isEmpty() || keyword == null || keyword.isEmpty()) return List.of();
 
-        // Flatten whitespace so snippets read cleanly as a single line.
-        // U+00A0 (non-breaking space) is normalised here too - SPA pages deliver it via
-        // textContent and it would otherwise survive into snippet text invisibly.
-        String flat = text.replaceAll("[\r\n\t\u00A0]+", " ").replaceAll(" {2,}", " ").trim();
+        String flat = flattenWhitespace(text);
 
         List<String> results = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -204,19 +202,25 @@ public class MatchEngine {
             String simpleKeyword = preserveSpaces
                     ? simplifyWithSpaces(keyword).strip()
                     : superSimplify(keyword);
-            if (simpleKeyword.length() >= 2) {
+            // Same redundancy check as countMatches: when the simplified pass cannot find
+            // anything new, skip building the position map - it is the single most expensive
+            // allocation in this class (an int per character of page text).
+            if (simpleKeyword.length() >= 2
+                    && !(preserveSpaces && simplifiedPassIsRedundant(flat, simpleKeyword, keyword))) {
                 StringBuilder simpleBuf = new StringBuilder(flat.length());
                 int[] origPos = new int[flat.length() * 2 + 1]; // *2 for rare ligature decomposition
                 int sLen = 0;
+                boolean lastWasSpace = false;
                 for (int ci = 0; ci < flat.length(); ci++) {
                     char c = flat.charAt(ci);
+                    boolean alnum = false;   // this source char produced an alphanumeric
+                    boolean visible = false; // it produced something that is not a combining mark
                     if (c < 128) {
-                        // ASCII fast path: NFD is a no-op for ASCII characters.
+                        // ASCII fast path: NFD is a no-op for ASCII, and no ASCII char is a mark.
+                        visible = true;
                         char lc = Character.toLowerCase(c);
                         if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9')) {
-                            if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(lc); }
-                        } else if (preserveSpaces && c == ' ') {
-                            if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(' '); }
+                            if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(lc); alnum = true; }
                         }
                     } else {
                         String nfd = Normalizer.normalize(String.valueOf(c), Normalizer.Form.NFD);
@@ -224,11 +228,22 @@ public class MatchEngine {
                             int type = Character.getType(nc);
                             if (type == Character.NON_SPACING_MARK || type == Character.COMBINING_SPACING_MARK
                                     || type == Character.ENCLOSING_MARK) continue;
+                            visible = true;
                             char lc = Character.toLowerCase(nc);
                             if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9')) {
-                                if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(lc); }
+                                if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(lc); alnum = true; }
                             }
                         }
+                    }
+                    // Mirror simplifyWithSpaces exactly: every run of non-alphanumeric characters
+                    // collapses to a single space. Dropping them instead (the previous behaviour)
+                    // built "realtime" here while countMatches saw "real time", so a multi-word
+                    // keyword spanning punctuation was counted but yielded no snippet.
+                    // Combining marks contribute nothing at all, matching the \p{M} strip.
+                    if (alnum) {
+                        lastWasSpace = false;
+                    } else if (preserveSpaces && visible && !lastWasSpace) {
+                        if (sLen < origPos.length) { origPos[sLen++] = ci; simpleBuf.append(' '); lastWasSpace = true; }
                     }
                 }
                 String simpleFlat = simpleBuf.toString();
@@ -246,6 +261,41 @@ public class MatchEngine {
         }
 
         return results;
+    }
+
+    /**
+     * Collapses every run of space, CR, LF, tab, and U+00A0 into a single space, then trims.
+     *
+     * <p>Snippets are printed on one line, so the source text is flattened first. U+00A0
+     * (non-breaking space) is included because SPA pages deliver it via {@code textContent},
+     * where it would otherwise survive into snippet text as an invisible character.
+     *
+     * <p>This runs unconditionally on every page that has a match, over the full page text.
+     * As a pair of {@code replaceAll} calls it was the dominant cost of {@link #findSnippets} -
+     * two regex passes plus two intermediate copies of a multi-megabyte string - so it is a
+     * single character pass instead.
+     *
+     * @param text the raw extracted text.
+     * @return the flattened, trimmed text.
+     */
+    private static String flattenWhitespace(String text) {
+        StringBuilder sb = new StringBuilder(text.length());
+        boolean lastWasSpace = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+                if (!lastWasSpace) { sb.append(' '); lastWasSpace = true; }
+            } else {
+                sb.append(c);
+                lastWasSpace = false;
+            }
+        }
+        // Matches the trailing .trim() of the original expression: at most one leading and one
+        // trailing space can remain after collapsing.
+        int from = 0, to = sb.length();
+        while (from < to && sb.charAt(from) <= ' ') from++;
+        while (to > from && sb.charAt(to - 1) <= ' ') to--;
+        return sb.substring(from, to);
     }
 
     /**
@@ -335,6 +385,45 @@ public class MatchEngine {
     }
 
     /**
+     * Returns {@code true} if every character of {@code s} is ASCII. Exits at the first
+     * non-ASCII character, so the common "page contains a curly quote near the top" case
+     * costs almost nothing.
+     */
+    private static boolean isAscii(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) > 127) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Returns {@code true} when the diacritic-stripping simplified pass provably cannot find
+     * anything the case-insensitive regex pass has not already found, so it can be skipped.
+     *
+     * <p>Simplification only lowercases and turns runs of non-alphanumeric characters into a
+     * single space; it never joins two alphanumeric runs that were not already adjacent. So when
+     * the text is pure ASCII and the simplified keyword is a single all-ASCII word, every
+     * simplified match corresponds to the same contiguous characters in the original text - which
+     * the case-insensitive regex matches too. The count can therefore only be equal or lower, and
+     * {@code countMatches} keeps the higher of the two.
+     *
+     * <p>All three conditions are load-bearing:
+     * <ul>
+     *   <li>Non-ASCII text: keyword {@code cafe} must still find {@code café}.</li>
+     *   <li>Non-ASCII keyword: keyword {@code café} must still find {@code cafe}.</li>
+     *   <li>Multi-word keyword: keyword {@code real time} must still find {@code real-time}.</li>
+     * </ul>
+     *
+     * @param text          the text being searched.
+     * @param simpleKeyword the already-simplified, stripped keyword.
+     * @param rawKeyword    the keyword as the user typed it.
+     * @return {@code true} if the simplified pass can be skipped without changing the result.
+     */
+    private static boolean simplifiedPassIsRedundant(String text, String simpleKeyword, String rawKeyword) {
+        return simpleKeyword.indexOf(' ') < 0 && isAscii(rawKeyword) && isAscii(text);
+    }
+
+    /**
      * Strips diacritics, lowercases, and removes all non-alphanumeric characters from {@code input}.
      *
      * <p>Uses Unicode NFD normalisation to decompose characters into base letter + combining
@@ -348,10 +437,7 @@ public class MatchEngine {
      * @return the simplified string; never {@code null}.
      */
     public String superSimplify(String input) {
-        if (input == null) return "";
-        String normalized = Normalizer.normalize(input, Normalizer.Form.NFD);
-        normalized = normalized.replaceAll("\\p{M}", "");
-        return normalized.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return simplify(input, false);
     }
 
     /**
@@ -368,10 +454,55 @@ public class MatchEngine {
      * @return the simplified string with whitespace collapsed to single spaces; never {@code null}.
      */
     private String simplifyWithSpaces(String input) {
+        return simplify(input, true);
+    }
+
+    /**
+     * Shared implementation behind {@link #superSimplify} and {@link #simplifyWithSpaces}.
+     *
+     * <p>Strips diacritics (NFD decomposition, then discard combining marks), lowercases, and
+     * reduces the result to ASCII letters and digits. When {@code keepSpaces} is {@code true},
+     * each run of discarded characters collapses to a single space; when {@code false} they are
+     * dropped entirely.
+     *
+     * <p>This is a single character pass rather than the chain of {@code replaceAll} calls it
+     * replaces. That chain allocated an intermediate string per stage and ran a regex engine over
+     * the whole page; on multi-megabyte pages it made default mode an order of magnitude slower
+     * than exact mode. Text that is entirely ASCII skips {@link Normalizer} altogether, since NFD
+     * is a no-op there and no ASCII character is a combining mark.
+     *
+     * @param input      the string to simplify; {@code null} is treated as {@code ""}.
+     * @param keepSpaces whether to emit a collapsed space for runs of discarded characters.
+     * @return the simplified string; never {@code null}.
+     */
+    private static String simplify(String input, boolean keepSpaces) {
         if (input == null) return "";
-        String normalized = Normalizer.normalize(input, Normalizer.Form.NFD);
-        normalized = normalized.replaceAll("\\p{M}", "");
-        return normalized.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ");
+
+        boolean ascii = true;
+        for (int i = 0; i < input.length(); i++) {
+            if (input.charAt(i) > 127) { ascii = false; break; }
+        }
+        String src = ascii ? input : Normalizer.normalize(input, Normalizer.Form.NFD);
+
+        StringBuilder sb = new StringBuilder(src.length());
+        boolean lastWasSpace = false;
+        for (int i = 0; i < src.length(); i++) {
+            char c = src.charAt(i);
+            if (!ascii && c > 127) {
+                int type = Character.getType(c);
+                if (type == Character.NON_SPACING_MARK || type == Character.COMBINING_SPACING_MARK
+                        || type == Character.ENCLOSING_MARK) continue;
+            }
+            char lc = Character.toLowerCase(c);
+            if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9')) {
+                sb.append(lc);
+                lastWasSpace = false;
+            } else if (keepSpaces && !lastWasSpace) {
+                sb.append(' ');
+                lastWasSpace = true;
+            }
+        }
+        return sb.toString();
     }
 
     /**

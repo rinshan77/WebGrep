@@ -179,10 +179,35 @@ public class CrawlResult {
             case "SSLException", "SSLHandshakeException",
                  "SSLPeerUnverifiedException"          -> "SSL error";
             case "UnsupportedMimeTypeException"         -> "Unsupported content type";
+            case "ZipException", "DataFormatException"   -> "Malformed compressed response";
             default -> {
+                // A message that is blank or newline-only yields an empty array from split(),
+                // so fall back to the class name rather than indexing into it.
                 String msg = e.getMessage();
-                yield msg != null ? msg.split("\n")[0] : e.getClass().getSimpleName();
+                String firstLine = msg != null ? msg.lines().findFirst().orElse("").strip() : "";
+                yield firstLine.isEmpty() ? e.getClass().getSimpleName() : stripClassNamePrefix(firstLine);
             }
         };
+    }
+
+    /**
+     * Removes a leading fully-qualified exception class name from a message.
+     *
+     * <p>Some libraries surface a wrapped cause by embedding its {@code toString()}, producing
+     * messages like {@code "java.util.zip.ZipException: invalid stored block lengths"}. The
+     * class name is noise in a user-facing error summary, so only the human-readable remainder
+     * is kept. Messages that merely contain a colon (a URL, for instance) are left alone.
+     *
+     * @param message the first line of an exception message.
+     * @return the message without a leading {@code some.pkg.SomeException: } prefix.
+     */
+    private static String stripClassNamePrefix(String message) {
+        int colon = message.indexOf(": ");
+        if (colon <= 0) return message;
+        String head = message.substring(0, colon);
+        // A class-name prefix looks like a.b.CamelCase with no spaces and at least one dot.
+        if (head.indexOf(' ') >= 0 || head.indexOf('.') < 0) return message;
+        String remainder = message.substring(colon + 2).strip();
+        return remainder.isEmpty() ? message : remainder;
     }
 }

@@ -899,6 +899,130 @@ public class MainTest {
     }
 
     @Test
+    public void testSimplifiedPassSkipDoesNotBreakItsThreeExceptions() {
+        // The simplified pass is skipped when text and keyword are both pure ASCII and the
+        // keyword is a single word. Each of these three cases violates one of those conditions
+        // and must still match; if the skip condition is ever loosened, one of them will fail.
+        MatchEngine engine = new MatchEngine();
+
+        // (1) non-ASCII text: keyword must still find the accented variant
+        assertEquals("ASCII keyword must find accented text",
+                1, engine.countMatches("a café here", "cafe", "default"));
+        // (2) non-ASCII keyword: must still find the unaccented variant
+        assertEquals("Accented keyword must find ASCII text",
+                1, engine.countMatches("a cafe here", "café", "default"));
+        // (3) multi-word keyword: must still match across punctuation
+        assertEquals("Multi-word keyword must match across a hyphen",
+                1, engine.countMatches("a real-time system", "real time", "default"));
+
+        // The case the skip actually applies to keeps working, including case-insensitivity.
+        assertEquals(2, engine.countMatches("Handler and handler", "handler", "default"));
+        assertEquals(0, engine.countMatches("no match here", "handler", "default"));
+    }
+
+    @Test
+    public void testSuperSimplifyBehaviourIsUnchangedByRewrite() {
+        MatchEngine engine = new MatchEngine();
+        assertEquals("cafe", engine.superSimplify("Café"));
+        assertEquals("tomas", engine.superSimplify("Tomáš"));
+        assertEquals("c", engine.superSimplify("C++"));
+        assertEquals("helloworld", engine.superSimplify("Hello, World!"));
+        assertEquals("", engine.superSimplify(""));
+        assertEquals("", engine.superSimplify(null));
+        assertEquals("abc123", engine.superSimplify("  a-b_c 1 2 3  "));
+    }
+
+    @Test
+    public void testSnippetsAccompanyCountForHyphenatedMultiWordKeyword() {
+        // The default-mode simplified pass turns punctuation into a space, so "real time"
+        // matches "real-time". findSnippets must apply the same rule when building its
+        // position map, otherwise a page reports a match count with no snippet to show.
+        MatchEngine engine = new MatchEngine();
+        String text = "we ship a real-time analytics engine now";
+        assertEquals(1, engine.countMatches(text, "real time", "default"));
+        List<String> snippets = engine.findSnippets(text, "real time", "default", 3);
+        assertEquals("A counted match must produce a snippet", 1, snippets.size());
+        assertTrue("Snippet must show the original hyphenated text: " + snippets.get(0),
+                snippets.get(0).contains("real-time"));
+    }
+
+    @Test
+    public void testSnippetsAccompanyCountAcrossOtherPunctuation() {
+        MatchEngine engine = new MatchEngine();
+        for (String text : List.of("it is state-of-the-art now", "an open/source project",
+                                   "send an e-mail today")) {
+            String keyword = text.contains("state") ? "state of the art"
+                    : text.contains("open") ? "open source" : "e mail";
+            int count = engine.countMatches(text, keyword, "default");
+            int snippets = engine.findSnippets(text, keyword, "default", 3).size();
+            assertTrue("Expected a match for '" + keyword + "' in: " + text, count > 0);
+            assertTrue("Count " + count + " but no snippet for: " + text, snippets > 0);
+        }
+    }
+
+    @Test
+    public void testSnippetSimplifiedPassStillRespectsWordBoundaries() {
+        // Guard against over-correcting: collapsing punctuation to spaces must not make
+        // "sofa" match "so far away" in either the count or the snippet pass.
+        MatchEngine engine = new MatchEngine();
+        assertEquals(0, engine.countMatches("so far away", "sofa", "default"));
+        assertTrue(engine.findSnippets("so far away", "sofa", "default", 3).isEmpty());
+    }
+
+    @Test
+    public void testClassifyExceptionStripsWrappedClassNamePrefix() {
+        // Jsoup surfaces some low-level failures as "java.util.zip.ZipException: invalid ...".
+        // The class name is stack noise in a user-facing error summary.
+        CrawlResult result = new CrawlResult();
+        result.addNetworkError(new RuntimeException(
+                "java.util.zip.ZipException: invalid stored block lengths"));
+        assertTrue("Class-name prefix must be stripped: " + result.networkErrorReasons.keySet(),
+                result.networkErrorReasons.containsKey("invalid stored block lengths"));
+
+        // A message that merely contains a colon must be left intact.
+        CrawlResult other = new CrawlResult();
+        other.addNetworkError(new RuntimeException("Failed to fetch https://example.com/a"));
+        assertTrue(other.networkErrorReasons.containsKey("Failed to fetch https://example.com/a"));
+    }
+
+    @Test
+    public void testClassifyExceptionWithNewlineOnlyMessage() {
+        // A message consisting only of newlines splits to an empty array; classifying it must
+        // fall back to the class name rather than throwing.
+        CrawlResult result = new CrawlResult();
+        result.addNetworkError(new RuntimeException("\n"));
+        result.addNetworkError(new RuntimeException("   "));
+        assertEquals("RuntimeException", result.networkErrorReasons.keySet().iterator().next());
+        assertEquals(2, (int) result.networkErrorReasons.get("RuntimeException"));
+    }
+
+    @Test
+    public void testHostPortSeedUrlIsGivenAnHttpScheme() {
+        // "localhost:8080" parses as scheme "localhost"; it must be read as host:port instead.
+        assertEquals("http://localhost:8080",
+                CliOptions.parse(new String[]{"-u", "localhost:8080", "-k", "x"}).getUrl());
+        assertEquals("http://example.com:8443/path",
+                CliOptions.parse(new String[]{"-u", "example.com:8443/path", "-k", "x"}).getUrl());
+        // Forms that already work must be left untouched.
+        assertEquals("example.com/path",
+                CliOptions.parse(new String[]{"-u", "example.com/path", "-k", "x"}).getUrl());
+        assertEquals("https://example.com",
+                CliOptions.parse(new String[]{"-u", "https://example.com", "-k", "x"}).getUrl());
+    }
+
+    @Test
+    public void testHostPortRewriteDoesNotAcceptRealNonHttpSchemes() {
+        for (String bad : List.of("ftp://example.com", "javascript:alert(1)", "file:///etc/passwd")) {
+            try {
+                CliOptions.parse(new String[]{"-u", bad, "-k", "x"}).validate();
+                fail("Expected rejection of " + bad);
+            } catch (IllegalArgumentException expected) {
+                // correct
+            }
+        }
+    }
+
+    @Test
     public void testIsSpaWithBeastiesContainer() {
         // Angular SSR optimiser adds data-beasties-container to the html element
         String html = "<html data-beasties-container><head></head><body>content</body></html>";

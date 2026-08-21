@@ -173,7 +173,7 @@ public class CliOptions {
             return options;
         }
 
-        options.url = params.get("url");
+        options.url = normalizeSeedUrl(params.get("url"));
         options.file = params.get("file");
         options.folder = params.get("folder");
         options.keyword = params.get("keyword");
@@ -197,6 +197,26 @@ public class CliOptions {
         options.output = params.getOrDefault("output", "text").toLowerCase(Locale.ROOT);
 
         return options;
+    }
+
+    /**
+     * Rewrites a schemeless {@code host:port} seed URL (e.g. {@code localhost:8080}) into an
+     * explicit {@code http://} URL.
+     *
+     * <p>Without this, {@code localhost:8080} parses as scheme {@code localhost} and is rejected
+     * with a misleading "URL scheme must be http or https" error - even though the schemeless
+     * form without a port ({@code localhost/path}) is accepted and given an {@code http://}
+     * prefix. Only a numeric port qualifies, so genuine non-http schemes such as {@code ftp://}
+     * and {@code javascript:} are still rejected by {@link #validate()}. Hosts starting with a
+     * digit ({@code 127.0.0.1:8080}) never matched the scheme pattern in the first place and
+     * already worked.
+     *
+     * @param url the raw {@code --url} value; may be {@code null}.
+     * @return the rewritten URL, or the input unchanged when it is not in {@code host:port} form.
+     */
+    private static String normalizeSeedUrl(String url) {
+        if (url == null) return null;
+        return url.matches("^[a-zA-Z][a-zA-Z0-9.-]*:\\d+(?:[/?#].*)?$") ? "http://" + url : url;
     }
 
     /**
@@ -307,7 +327,7 @@ public class CliOptions {
         System.out.println("  -f <path>  -k <keyword> [options]   local file mode");
         System.out.println("  -F <path>  -k <keyword> [options]   local folder mode");
         System.out.println("\nOptions:");
-        System.out.println("  -u, --url <URL>          The starting URL (required, unless --file or --folder is used)");
+        System.out.println("  -u, --url <URL>          The starting URL; scheme optional (default http), e.g. localhost:8080");
         System.out.println("  -f, --file <path>        Search a local file instead of crawling the web");
         System.out.println("  -F, --folder <path>      Search all files in a local folder (recursive)");
         System.out.println("  -k, --keyword <word>     The keyword to search for (required)");
